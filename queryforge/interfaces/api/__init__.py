@@ -1,0 +1,1 @@
+"""Optional FastAPI transport adapter."""

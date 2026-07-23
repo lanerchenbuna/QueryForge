@@ -1,0 +1,5 @@
+name: transformation_and_orchestration
+description: Design idempotent transformations with explicit dependencies, stages, and backfill behavior.
+allowed_nodes: [plan_mode, gen_sql, reflect, fix]
+enabled: false
+priority: 70

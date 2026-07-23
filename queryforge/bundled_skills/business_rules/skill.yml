@@ -1,0 +1,5 @@
+name: business_rules
+description: Example commerce metric rules for order revenue and cancellation handling.
+allowed_nodes: [gen_sql, reflect, fix]
+enabled: false
+priority: 95

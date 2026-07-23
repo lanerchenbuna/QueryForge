@@ -1,0 +1,5 @@
+name: ingestion_and_cdc
+description: Reason about source ingestion, incremental loads, deduplication, and change-data capture.
+allowed_nodes: [plan_mode, gen_sql, reflect, fix]
+enabled: false
+priority: 80

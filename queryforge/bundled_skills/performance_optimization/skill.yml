@@ -1,0 +1,5 @@
+name: performance_optimization
+description: Reduce scanned data and expensive operations without changing query semantics.
+allowed_nodes: [gen_sql, reflect, fix]
+enabled: false
+priority: 60

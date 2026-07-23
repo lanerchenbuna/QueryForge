@@ -1,0 +1,5 @@
+name: data_quality_testing
+description: Validate schema, uniqueness, completeness, validity, reconciliation, and freshness.
+allowed_nodes: [gen_sql, reflect, fix]
+enabled: false
+priority: 85

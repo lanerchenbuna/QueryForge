@@ -1,0 +1,361 @@
+anime_id,title,original_title,studio_id,sequel_of_anime_id,content_format,source_material,release_year,age_rating,production_status,episode_count,production_budget_usd
+1,Azure Voyager 001,Original Title 001,12,,Series,Game,2005,PG,Ongoing,16,5364775.72
+2,Crimson Voyager 002,Original Title 002,23,,Movie,Light Novel,2012,PG-13,Announced,16,3171663.78
+3,Silent Voyager 003,Original Title 003,34,,OVA,Web Novel,2019,R,Completed,16,5554870.81
+4,Neon Voyager 004,Original Title 004,45,,ONA,Original,1998,G,Ongoing,16,4712522.61
+5,Celestial Voyager 005,Original Title 005,8,,Series,Manga,2005,PG,Announced,16,674833.52
+6,Clockwork Voyager 006,Original Title 006,19,,Movie,Game,2012,PG-13,Completed,16,787893.01
+7,Paper Voyager 007,Original Title 007,30,,OVA,Light Novel,2019,R,Ongoing,16,3338704.77
+8,Golden Voyager 008,Original Title 008,41,,ONA,Web Novel,1998,G,Announced,16,4453044.9
+9,Midnight Voyager 009,Original Title 009,4,,Series,Original,2005,PG,Completed,16,347434.33
+10,Electric Voyager 010,Original Title 010,15,,Movie,Manga,2012,PG-13,Ongoing,16,8217494.93
+11,Falling Voyager 011,Original Title 011,26,,OVA,Game,2019,R,Announced,16,6052653.54
+12,Hidden Voyager 012,Original Title 012,37,,ONA,Light Novel,1998,G,Completed,16,7002397.04
+13,Azure Garden 013,Original Title 013,48,,Series,Web Novel,2005,PG,Ongoing,16,2526408.27
+14,Crimson Garden 014,Original Title 014,11,,Movie,Original,2012,PG-13,Announced,16,5582146.75
+15,Silent Garden 015,Original Title 015,22,,OVA,Manga,2019,R,Completed,16,3172293.21
+16,Neon Garden 016,Original Title 016,33,,ONA,Game,1998,G,Ongoing,16,8179465.63
+17,Celestial Garden 017,Original Title 017,44,,Series,Light Novel,2005,PG,Announced,16,1654593.56
+18,Clockwork Garden 018,Original Title 018,7,,Movie,Web Novel,2012,PG-13,Completed,16,2291315.7
+19,Paper Garden 019,Original Title 019,18,,OVA,Original,2019,R,Ongoing,16,2232161.63
+20,Golden Garden 020,Original Title 020,29,,ONA,Manga,1998,G,Announced,16,4879963.88
+21,Midnight Garden 021,Original Title 021,40,,Series,Game,2005,PG,Completed,16,8405497.81
+22,Electric Garden 022,Original Title 022,3,,Movie,Light Novel,2012,PG-13,Ongoing,16,4532549.31
+23,Falling Garden 023,Original Title 023,14,,OVA,Web Novel,2019,R,Announced,16,3162230.45
+24,Hidden Garden 024,Original Title 024,25,,ONA,Original,1998,G,Completed,16,869076.3
+25,Azure Requiem 025,Original Title 025,36,,Series,Manga,2005,PG,Ongoing,16,2888305.78
+26,Crimson Requiem 026,Original Title 026,47,,Movie,Game,2012,PG-13,Announced,16,2976491.09
+27,Silent Requiem 027,Original Title 027,10,,OVA,Light Novel,2019,R,Completed,16,2728784.12
+28,Neon Requiem 028,Original Title 028,21,,ONA,Web Novel,1998,G,Ongoing,16,522173.44
+29,Celestial Requiem 029,Original Title 029,32,,Series,Original,2005,PG,Announced,16,1439090.41
+30,Clockwork Requiem 030,Original Title 030,43,,Movie,Manga,2012,PG-13,Completed,16,2515720.2
+31,Paper Requiem 031,Original Title 031,6,,OVA,Game,2019,R,Ongoing,16,7850800.16
+32,Golden Requiem 032,Original Title 032,17,,ONA,Light Novel,1998,G,Announced,16,8275013.83
+33,Midnight Requiem 033,Original Title 033,28,,Series,Web Novel,2005,PG,Completed,16,5651333.21
+34,Electric Requiem 034,Original Title 034,39,,Movie,Original,2012,PG-13,Ongoing,16,1574129.17
+35,Falling Requiem 035,Original Title 035,2,,OVA,Manga,2019,R,Announced,16,7982922.35
+36,Hidden Requiem 036,Original Title 036,13,,ONA,Game,1998,G,Completed,16,4627189.27
+37,Azure Chronicle 037,Original Title 037,24,,Series,Light Novel,2005,PG,Ongoing,16,813239.51
+38,Crimson Chronicle 038,Original Title 038,35,,Movie,Web Novel,2012,PG-13,Announced,16,836081.38
+39,Silent Chronicle 039,Original Title 039,46,,OVA,Original,2019,R,Completed,16,4218804.34
+40,Neon Chronicle 040,Original Title 040,9,,ONA,Manga,1998,G,Ongoing,16,2735180.53
+41,Celestial Chronicle 041,Original Title 041,20,,Series,Game,2005,PG,Announced,16,642384.03
+42,Clockwork Chronicle 042,Original Title 042,31,,Movie,Light Novel,2012,PG-13,Completed,16,3316532.03
+43,Paper Chronicle 043,Original Title 043,42,,OVA,Web Novel,2019,R,Ongoing,16,1254814.5
+44,Golden Chronicle 044,Original Title 044,5,,ONA,Original,1998,G,Announced,16,7928010.74
+45,Midnight Chronicle 045,Original Title 045,16,,Series,Manga,2005,PG,Completed,16,2941776.96
+46,Electric Chronicle 046,Original Title 046,27,,Movie,Game,2012,PG-13,Ongoing,16,4919600.36
+47,Falling Chronicle 047,Original Title 047,38,,OVA,Light Novel,2019,R,Announced,16,3415582.89
+48,Hidden Chronicle 048,Original Title 048,1,,ONA,Web Novel,1998,G,Completed,16,3715687.05
+49,Azure Signal 049,Original Title 049,12,,Series,Original,2005,PG,Ongoing,16,6440392.25
+50,Crimson Signal 050,Original Title 050,23,,Movie,Manga,2012,PG-13,Announced,16,5799463.13
+51,Silent Signal 051,Original Title 051,34,,OVA,Game,2019,R,Completed,16,8250651.4
+52,Neon Signal 052,Original Title 052,45,,ONA,Light Novel,1998,G,Ongoing,16,6089407.72
+53,Celestial Signal 053,Original Title 053,8,,Series,Web Novel,2005,PG,Announced,16,2648028.91
+54,Clockwork Signal 054,Original Title 054,19,,Movie,Original,2012,PG-13,Completed,16,8430381.06
+55,Paper Signal 055,Original Title 055,30,,OVA,Manga,2019,R,Ongoing,16,5846668.5
+56,Golden Signal 056,Original Title 056,41,,ONA,Game,1998,G,Announced,16,1593366.47
+57,Midnight Signal 057,Original Title 057,4,,Series,Light Novel,2005,PG,Completed,16,1254985.55
+58,Electric Signal 058,Original Title 058,15,,Movie,Web Novel,2012,PG-13,Ongoing,16,5286479.44
+59,Falling Signal 059,Original Title 059,26,,OVA,Original,2019,R,Announced,16,7109551.97
+60,Hidden Signal 060,Original Title 060,37,,ONA,Manga,1998,G,Completed,16,4149943.19
+61,Azure Frontier 061,Original Title 061,48,,Series,Game,2005,PG,Ongoing,16,2558873.53
+62,Crimson Frontier 062,Original Title 062,11,,Movie,Light Novel,2012,PG-13,Announced,16,6166625.18
+63,Silent Frontier 063,Original Title 063,22,,OVA,Web Novel,2019,R,Completed,16,7938279.96
+64,Neon Frontier 064,Original Title 064,33,,ONA,Original,1998,G,Ongoing,16,4400088.67
+65,Celestial Frontier 065,Original Title 065,44,,Series,Manga,2005,PG,Announced,16,551884.33
+66,Clockwork Frontier 066,Original Title 066,7,,Movie,Game,2012,PG-13,Completed,16,2752298.03
+67,Paper Frontier 067,Original Title 067,18,,OVA,Light Novel,2019,R,Ongoing,16,3994272.83
+68,Golden Frontier 068,Original Title 068,29,,ONA,Web Novel,1998,G,Announced,16,1323983.35
+69,Midnight Frontier 069,Original Title 069,40,,Series,Original,2005,PG,Completed,16,5416320.59
+70,Electric Frontier 070,Original Title 070,3,,Movie,Manga,2012,PG-13,Ongoing,16,5556715.76
+71,Falling Frontier 071,Original Title 071,14,,OVA,Game,2019,R,Announced,16,539072.13
+72,Hidden Frontier 072,Original Title 072,25,,ONA,Light Novel,1998,G,Completed,16,5155468.39
+73,Azure Paradox 073,Original Title 073,36,,Series,Web Novel,2005,PG,Ongoing,16,3184157.04
+74,Crimson Paradox 074,Original Title 074,47,,Movie,Original,2012,PG-13,Announced,16,3494847.66
+75,Silent Paradox 075,Original Title 075,10,39,OVA,Manga,2019,R,Completed,16,6681474.41
+76,Neon Paradox 076,Original Title 076,21,,ONA,Game,1998,G,Ongoing,16,5971562.96
+77,Celestial Paradox 077,Original Title 077,32,,Series,Light Novel,2005,PG,Announced,16,8450118.28
+78,Clockwork Paradox 078,Original Title 078,43,,Movie,Web Novel,2012,PG-13,Completed,16,7693880.98
+79,Paper Paradox 079,Original Title 079,6,,OVA,Original,2019,R,Ongoing,16,2983770.43
+80,Golden Paradox 080,Original Title 080,17,44,ONA,Manga,1998,G,Announced,16,3865627.23
+81,Midnight Paradox 081,Original Title 081,28,,Series,Game,2005,PG,Completed,16,8410843.89
+82,Electric Paradox 082,Original Title 082,39,,Movie,Light Novel,2012,PG-13,Ongoing,16,756809.04
+83,Falling Paradox 083,Original Title 083,2,,OVA,Web Novel,2019,R,Announced,16,2073463.55
+84,Hidden Paradox 084,Original Title 084,13,,ONA,Original,1998,G,Completed,16,3410109.26
+85,Azure Melody 085,Original Title 085,24,49,Series,Manga,2005,PG,Ongoing,16,968604.91
+86,Crimson Melody 086,Original Title 086,35,,Movie,Game,2012,PG-13,Announced,16,4938555.56
+87,Silent Melody 087,Original Title 087,46,,OVA,Light Novel,2019,R,Completed,16,947641.75
+88,Neon Melody 088,Original Title 088,9,,ONA,Web Novel,1998,G,Ongoing,16,3958022.97
+89,Celestial Melody 089,Original Title 089,20,,Series,Original,2005,PG,Announced,16,2579538.75
+90,Clockwork Melody 090,Original Title 090,31,54,Movie,Manga,2012,PG-13,Completed,16,6339341.52
+91,Paper Melody 091,Original Title 091,42,,OVA,Game,2019,R,Ongoing,16,1771932.12
+92,Golden Melody 092,Original Title 092,5,,ONA,Light Novel,1998,G,Announced,16,1188495.68
+93,Midnight Melody 093,Original Title 093,16,,Series,Web Novel,2005,PG,Completed,16,6643537.61
+94,Electric Melody 094,Original Title 094,27,,Movie,Original,2012,PG-13,Ongoing,16,4304568.73
+95,Falling Melody 095,Original Title 095,38,59,OVA,Manga,2019,R,Announced,16,372979.05
+96,Hidden Melody 096,Original Title 096,1,,ONA,Game,1998,G,Completed,16,1794227.04
+97,Azure Guardian 097,Original Title 097,12,,Series,Light Novel,2005,PG,Ongoing,16,7971346.78
+98,Crimson Guardian 098,Original Title 098,23,,Movie,Web Novel,2012,PG-13,Announced,16,8301640.15
+99,Silent Guardian 099,Original Title 099,34,,OVA,Original,2019,R,Completed,16,2585907.1
+100,Neon Guardian 100,Original Title 100,45,64,ONA,Manga,1998,G,Ongoing,16,8464723.29
+101,Celestial Guardian 101,Original Title 101,8,,Series,Game,2005,PG,Announced,16,8390131.11
+102,Clockwork Guardian 102,Original Title 102,19,,Movie,Light Novel,2012,PG-13,Completed,16,455967.16
+103,Paper Guardian 103,Original Title 103,30,,OVA,Web Novel,2019,R,Ongoing,16,4763677.16
+104,Golden Guardian 104,Original Title 104,41,,ONA,Original,1998,G,Announced,16,2571264.63
+105,Midnight Guardian 105,Original Title 105,4,69,Series,Manga,2005,PG,Completed,16,6821397.41
+106,Electric Guardian 106,Original Title 106,15,,Movie,Game,2012,PG-13,Ongoing,16,4507387.37
+107,Falling Guardian 107,Original Title 107,26,,OVA,Light Novel,2019,R,Announced,16,1551168.27
+108,Hidden Guardian 108,Original Title 108,37,,ONA,Web Novel,1998,G,Completed,16,7787881.19
+109,Azure Archive 109,Original Title 109,48,,Series,Original,2005,PG,Ongoing,16,8167077.66
+110,Crimson Archive 110,Original Title 110,11,74,Movie,Manga,2012,PG-13,Announced,16,4545236.23
+111,Silent Archive 111,Original Title 111,22,,OVA,Game,2019,R,Completed,16,1523514.82
+112,Neon Archive 112,Original Title 112,33,,ONA,Light Novel,1998,G,Ongoing,16,1361354.46
+113,Celestial Archive 113,Original Title 113,44,,Series,Web Novel,2005,PG,Announced,16,3814817.39
+114,Clockwork Archive 114,Original Title 114,7,,Movie,Original,2012,PG-13,Completed,16,7069592.49
+115,Paper Archive 115,Original Title 115,18,79,OVA,Manga,2019,R,Ongoing,16,2667439.89
+116,Golden Archive 116,Original Title 116,29,,ONA,Game,1998,G,Announced,16,4349341.28
+117,Midnight Archive 117,Original Title 117,40,,Series,Light Novel,2005,PG,Completed,16,4935385.27
+118,Electric Archive 118,Original Title 118,3,,Movie,Web Novel,2012,PG-13,Ongoing,16,6064632.48
+119,Falling Archive 119,Original Title 119,14,,OVA,Original,2019,R,Announced,16,7717984.34
+120,Hidden Archive 120,Original Title 120,25,84,ONA,Manga,1998,G,Completed,16,6714421.47
+121,Azure Horizon 121,Original Title 121,36,,Series,Game,2005,PG,Ongoing,16,5269228.63
+122,Crimson Horizon 122,Original Title 122,47,,Movie,Light Novel,2012,PG-13,Announced,16,3844581.02
+123,Silent Horizon 123,Original Title 123,10,,OVA,Web Novel,2019,R,Completed,16,3725901.4
+124,Neon Horizon 124,Original Title 124,21,,ONA,Original,1998,G,Ongoing,16,234792.65
+125,Celestial Horizon 125,Original Title 125,32,89,Series,Manga,2005,PG,Announced,16,3484900.88
+126,Clockwork Horizon 126,Original Title 126,43,,Movie,Game,2012,PG-13,Completed,16,4496794.24
+127,Paper Horizon 127,Original Title 127,6,,OVA,Light Novel,2019,R,Ongoing,16,4752009.66
+128,Golden Horizon 128,Original Title 128,17,,ONA,Web Novel,1998,G,Announced,16,5898970.91
+129,Midnight Horizon 129,Original Title 129,28,,Series,Original,2005,PG,Completed,16,7514329.12
+130,Electric Horizon 130,Original Title 130,39,94,Movie,Manga,2012,PG-13,Ongoing,16,5667355.43
+131,Falling Horizon 131,Original Title 131,2,,OVA,Game,2019,R,Announced,16,4707988.77
+132,Hidden Horizon 132,Original Title 132,13,,ONA,Light Novel,1998,G,Completed,16,3375568.66
+133,Azure Lantern 133,Original Title 133,24,,Series,Web Novel,2005,PG,Ongoing,16,7205442.71
+134,Crimson Lantern 134,Original Title 134,35,,Movie,Original,2012,PG-13,Announced,16,2725641.04
+135,Silent Lantern 135,Original Title 135,46,99,OVA,Manga,2019,R,Completed,16,7113777.49
+136,Neon Lantern 136,Original Title 136,9,,ONA,Game,1998,G,Ongoing,16,8130378.28
+137,Celestial Lantern 137,Original Title 137,20,,Series,Light Novel,2005,PG,Announced,16,6333151.91
+138,Clockwork Lantern 138,Original Title 138,31,,Movie,Web Novel,2012,PG-13,Completed,16,2326433.77
+139,Paper Lantern 139,Original Title 139,42,,OVA,Original,2019,R,Ongoing,16,2968362.53
+140,Golden Lantern 140,Original Title 140,5,104,ONA,Manga,1998,G,Announced,16,6938309.04
+141,Midnight Lantern 141,Original Title 141,16,,Series,Game,2005,PG,Completed,16,2708260.64
+142,Electric Lantern 142,Original Title 142,27,,Movie,Light Novel,2012,PG-13,Ongoing,16,1727197.37
+143,Falling Lantern 143,Original Title 143,38,,OVA,Web Novel,2019,R,Announced,16,2662922.72
+144,Hidden Lantern 144,Original Title 144,1,,ONA,Original,1998,G,Completed,16,3602443.94
+145,Azure Odyssey 145,Original Title 145,12,109,Series,Manga,2005,PG,Ongoing,16,3343770.84
+146,Crimson Odyssey 146,Original Title 146,23,,Movie,Game,2012,PG-13,Announced,16,7045229.8
+147,Silent Odyssey 147,Original Title 147,34,,OVA,Light Novel,2019,R,Completed,16,587558.89
+148,Neon Odyssey 148,Original Title 148,45,,ONA,Web Novel,1998,G,Ongoing,16,7573616.5
+149,Celestial Odyssey 149,Original Title 149,8,,Series,Original,2005,PG,Announced,16,996222.84
+150,Clockwork Odyssey 150,Original Title 150,19,114,Movie,Manga,2012,PG-13,Completed,16,7183405.96
+151,Paper Odyssey 151,Original Title 151,30,,OVA,Game,2019,R,Ongoing,16,1245142.3
+152,Golden Odyssey 152,Original Title 152,41,,ONA,Light Novel,1998,G,Announced,16,221393.56
+153,Midnight Odyssey 153,Original Title 153,4,,Series,Web Novel,2005,PG,Completed,16,7931669.43
+154,Electric Odyssey 154,Original Title 154,15,,Movie,Original,2012,PG-13,Ongoing,16,5099624.31
+155,Falling Odyssey 155,Original Title 155,26,119,OVA,Manga,2019,R,Announced,16,3773865.83
+156,Hidden Odyssey 156,Original Title 156,37,,ONA,Game,1998,G,Completed,16,2497220.15
+157,Azure Protocol 157,Original Title 157,48,,Series,Light Novel,2005,PG,Ongoing,16,7968295.45
+158,Crimson Protocol 158,Original Title 158,11,,Movie,Web Novel,2012,PG-13,Announced,16,863073.29
+159,Silent Protocol 159,Original Title 159,22,,OVA,Original,2019,R,Completed,16,3784745.55
+160,Neon Protocol 160,Original Title 160,33,124,ONA,Manga,1998,G,Ongoing,16,5192577.72
+161,Celestial Protocol 161,Original Title 161,44,,Series,Game,2005,PG,Announced,16,4647111.5
+162,Clockwork Protocol 162,Original Title 162,7,,Movie,Light Novel,2012,PG-13,Completed,16,7234829.13
+163,Paper Protocol 163,Original Title 163,18,,OVA,Web Novel,2019,R,Ongoing,16,4402454.67
+164,Golden Protocol 164,Original Title 164,29,,ONA,Original,1998,G,Announced,16,6002054.45
+165,Midnight Protocol 165,Original Title 165,40,129,Series,Manga,2005,PG,Completed,16,7570838.32
+166,Electric Protocol 166,Original Title 166,3,,Movie,Game,2012,PG-13,Ongoing,16,1017001.07
+167,Falling Protocol 167,Original Title 167,14,,OVA,Light Novel,2019,R,Announced,16,1782283.12
+168,Hidden Protocol 168,Original Title 168,25,,ONA,Web Novel,1998,G,Completed,16,6083283.74
+169,Azure Kingdom 169,Original Title 169,36,,Series,Original,2005,PG,Ongoing,16,6307009.84
+170,Crimson Kingdom 170,Original Title 170,47,134,Movie,Manga,2012,PG-13,Announced,16,1838452.18
+171,Silent Kingdom 171,Original Title 171,10,,OVA,Game,2019,R,Completed,16,2005802.28
+172,Neon Kingdom 172,Original Title 172,21,,ONA,Light Novel,1998,G,Ongoing,16,5878745.61
+173,Celestial Kingdom 173,Original Title 173,32,,Series,Web Novel,2005,PG,Announced,16,1828588.09
+174,Clockwork Kingdom 174,Original Title 174,43,,Movie,Original,2012,PG-13,Completed,16,2543460.41
+175,Paper Kingdom 175,Original Title 175,6,139,OVA,Manga,2019,R,Ongoing,16,4506469.35
+176,Golden Kingdom 176,Original Title 176,17,,ONA,Game,1998,G,Announced,16,8083818.36
+177,Midnight Kingdom 177,Original Title 177,28,,Series,Light Novel,2005,PG,Completed,16,5251584.42
+178,Electric Kingdom 178,Original Title 178,39,,Movie,Web Novel,2012,PG-13,Ongoing,16,7069690.42
+179,Falling Kingdom 179,Original Title 179,2,,OVA,Original,2019,R,Announced,16,5417763.52
+180,Hidden Kingdom 180,Original Title 180,13,144,ONA,Manga,1998,G,Completed,16,5444309.07
+181,Azure Voyager 181,Original Title 181,24,,Series,Game,2005,PG,Ongoing,16,2228293.18
+182,Crimson Voyager 182,Original Title 182,35,,Movie,Light Novel,2012,PG-13,Announced,16,4532289.1
+183,Silent Voyager 183,Original Title 183,46,,OVA,Web Novel,2019,R,Completed,16,1801879.74
+184,Neon Voyager 184,Original Title 184,9,,ONA,Original,1998,G,Ongoing,16,8117500.42
+185,Celestial Voyager 185,Original Title 185,20,149,Series,Manga,2005,PG,Announced,16,6200642.57
+186,Clockwork Voyager 186,Original Title 186,31,,Movie,Game,2012,PG-13,Completed,16,8373008.58
+187,Paper Voyager 187,Original Title 187,42,,OVA,Light Novel,2019,R,Ongoing,16,5880587.96
+188,Golden Voyager 188,Original Title 188,5,,ONA,Web Novel,1998,G,Announced,16,7371993.41
+189,Midnight Voyager 189,Original Title 189,16,,Series,Original,2005,PG,Completed,16,925375.44
+190,Electric Voyager 190,Original Title 190,27,154,Movie,Manga,2012,PG-13,Ongoing,16,4933184.49
+191,Falling Voyager 191,Original Title 191,38,,OVA,Game,2019,R,Announced,16,6603121.21
+192,Hidden Voyager 192,Original Title 192,1,,ONA,Light Novel,1998,G,Completed,16,5378537.56
+193,Azure Garden 193,Original Title 193,12,,Series,Web Novel,2005,PG,Ongoing,16,7394732.15
+194,Crimson Garden 194,Original Title 194,23,,Movie,Original,2012,PG-13,Announced,16,7094223.38
+195,Silent Garden 195,Original Title 195,34,159,OVA,Manga,2019,R,Completed,16,922013.59
+196,Neon Garden 196,Original Title 196,45,,ONA,Game,1998,G,Ongoing,16,513807.83
+197,Celestial Garden 197,Original Title 197,8,,Series,Light Novel,2005,PG,Announced,16,549908.35
+198,Clockwork Garden 198,Original Title 198,19,,Movie,Web Novel,2012,PG-13,Completed,16,5238606.43
+199,Paper Garden 199,Original Title 199,30,,OVA,Original,2019,R,Ongoing,16,1097226.56
+200,Golden Garden 200,Original Title 200,41,164,ONA,Manga,1998,G,Announced,16,7115409.66
+201,Midnight Garden 201,Original Title 201,4,,Series,Game,2005,PG,Completed,16,2476519.23
+202,Electric Garden 202,Original Title 202,15,,Movie,Light Novel,2012,PG-13,Ongoing,16,5677556.02
+203,Falling Garden 203,Original Title 203,26,,OVA,Web Novel,2019,R,Announced,16,6134210.32
+204,Hidden Garden 204,Original Title 204,37,,ONA,Original,1998,G,Completed,16,8447824.07
+205,Azure Requiem 205,Original Title 205,48,169,Series,Manga,2005,PG,Ongoing,16,495113.12
+206,Crimson Requiem 206,Original Title 206,11,,Movie,Game,2012,PG-13,Announced,16,5251708.34
+207,Silent Requiem 207,Original Title 207,22,,OVA,Light Novel,2019,R,Completed,16,550204.72
+208,Neon Requiem 208,Original Title 208,33,,ONA,Web Novel,1998,G,Ongoing,16,8163197.55
+209,Celestial Requiem 209,Original Title 209,44,,Series,Original,2005,PG,Announced,16,4969162.35
+210,Clockwork Requiem 210,Original Title 210,7,174,Movie,Manga,2012,PG-13,Completed,16,8269593.99
+211,Paper Requiem 211,Original Title 211,18,,OVA,Game,2019,R,Ongoing,16,6661447.76
+212,Golden Requiem 212,Original Title 212,29,,ONA,Light Novel,1998,G,Announced,16,6632498.4
+213,Midnight Requiem 213,Original Title 213,40,,Series,Web Novel,2005,PG,Completed,16,5729103.26
+214,Electric Requiem 214,Original Title 214,3,,Movie,Original,2012,PG-13,Ongoing,16,5322485.06
+215,Falling Requiem 215,Original Title 215,14,179,OVA,Manga,2019,R,Announced,16,7956077.74
+216,Hidden Requiem 216,Original Title 216,25,,ONA,Game,1998,G,Completed,16,660963.56
+217,Azure Chronicle 217,Original Title 217,36,,Series,Light Novel,2005,PG,Ongoing,16,3503169.37
+218,Crimson Chronicle 218,Original Title 218,47,,Movie,Web Novel,2012,PG-13,Announced,16,4182459.25
+219,Silent Chronicle 219,Original Title 219,10,,OVA,Original,2019,R,Completed,16,4456214.88
+220,Neon Chronicle 220,Original Title 220,21,184,ONA,Manga,1998,G,Ongoing,16,2596050.94
+221,Celestial Chronicle 221,Original Title 221,32,,Series,Game,2005,PG,Announced,16,1824071.42
+222,Clockwork Chronicle 222,Original Title 222,43,,Movie,Light Novel,2012,PG-13,Completed,16,3228420.22
+223,Paper Chronicle 223,Original Title 223,6,,OVA,Web Novel,2019,R,Ongoing,16,3745433.92
+224,Golden Chronicle 224,Original Title 224,17,,ONA,Original,1998,G,Announced,16,6747360.72
+225,Midnight Chronicle 225,Original Title 225,28,189,Series,Manga,2005,PG,Completed,16,224541.03
+226,Electric Chronicle 226,Original Title 226,39,,Movie,Game,2012,PG-13,Ongoing,16,877897.31
+227,Falling Chronicle 227,Original Title 227,2,,OVA,Light Novel,2019,R,Announced,16,4473457.9
+228,Hidden Chronicle 228,Original Title 228,13,,ONA,Web Novel,1998,G,Completed,16,5559093.85
+229,Azure Signal 229,Original Title 229,24,,Series,Original,2005,PG,Ongoing,16,2518717.09
+230,Crimson Signal 230,Original Title 230,35,194,Movie,Manga,2012,PG-13,Announced,16,3761491.88
+231,Silent Signal 231,Original Title 231,46,,OVA,Game,2019,R,Completed,16,4061554.67
+232,Neon Signal 232,Original Title 232,9,,ONA,Light Novel,1998,G,Ongoing,16,3908381.46
+233,Celestial Signal 233,Original Title 233,20,,Series,Web Novel,2005,PG,Announced,16,7404628.75
+234,Clockwork Signal 234,Original Title 234,31,,Movie,Original,2012,PG-13,Completed,16,5069762.88
+235,Paper Signal 235,Original Title 235,42,199,OVA,Manga,2019,R,Ongoing,16,2794903.07
+236,Golden Signal 236,Original Title 236,5,,ONA,Game,1998,G,Announced,16,4540329.26
+237,Midnight Signal 237,Original Title 237,16,,Series,Light Novel,2005,PG,Completed,16,7498567.39
+238,Electric Signal 238,Original Title 238,27,,Movie,Web Novel,2012,PG-13,Ongoing,16,4750007.05
+239,Falling Signal 239,Original Title 239,38,,OVA,Original,2019,R,Announced,16,2431309.14
+240,Hidden Signal 240,Original Title 240,1,204,ONA,Manga,1998,G,Completed,16,1702129.56
+241,Azure Frontier 241,Original Title 241,12,,Series,Game,2005,PG,Ongoing,16,1684860.06
+242,Crimson Frontier 242,Original Title 242,23,,Movie,Light Novel,2012,PG-13,Announced,16,355846.62
+243,Silent Frontier 243,Original Title 243,34,,OVA,Web Novel,2019,R,Completed,16,3155853.69
+244,Neon Frontier 244,Original Title 244,45,,ONA,Original,1998,G,Ongoing,16,5779341.24
+245,Celestial Frontier 245,Original Title 245,8,209,Series,Manga,2005,PG,Announced,16,6873437.06
+246,Clockwork Frontier 246,Original Title 246,19,,Movie,Game,2012,PG-13,Completed,16,2171308.82
+247,Paper Frontier 247,Original Title 247,30,,OVA,Light Novel,2019,R,Ongoing,16,3956350.69
+248,Golden Frontier 248,Original Title 248,41,,ONA,Web Novel,1998,G,Announced,16,4927161.81
+249,Midnight Frontier 249,Original Title 249,4,,Series,Original,2005,PG,Completed,16,6378657.17
+250,Electric Frontier 250,Original Title 250,15,214,Movie,Manga,2012,PG-13,Ongoing,16,2970870.08
+251,Falling Frontier 251,Original Title 251,26,,OVA,Game,2019,R,Announced,16,3027004.3
+252,Hidden Frontier 252,Original Title 252,37,,ONA,Light Novel,1998,G,Completed,16,4652984.85
+253,Azure Paradox 253,Original Title 253,48,,Series,Web Novel,2005,PG,Ongoing,16,8116727.91
+254,Crimson Paradox 254,Original Title 254,11,,Movie,Original,2012,PG-13,Announced,16,2875814.83
+255,Silent Paradox 255,Original Title 255,22,219,OVA,Manga,2019,R,Completed,16,4873927.49
+256,Neon Paradox 256,Original Title 256,33,,ONA,Game,1998,G,Ongoing,16,3576326.32
+257,Celestial Paradox 257,Original Title 257,44,,Series,Light Novel,2005,PG,Announced,16,7004558.5
+258,Clockwork Paradox 258,Original Title 258,7,,Movie,Web Novel,2012,PG-13,Completed,16,3324309.04
+259,Paper Paradox 259,Original Title 259,18,,OVA,Original,2019,R,Ongoing,16,5082631.7
+260,Golden Paradox 260,Original Title 260,29,224,ONA,Manga,1998,G,Announced,16,3468348.09
+261,Midnight Paradox 261,Original Title 261,40,,Series,Game,2005,PG,Completed,16,2710481.12
+262,Electric Paradox 262,Original Title 262,3,,Movie,Light Novel,2012,PG-13,Ongoing,16,5731933.04
+263,Falling Paradox 263,Original Title 263,14,,OVA,Web Novel,2019,R,Announced,16,5735607.85
+264,Hidden Paradox 264,Original Title 264,25,,ONA,Original,1998,G,Completed,16,6139404.37
+265,Azure Melody 265,Original Title 265,36,229,Series,Manga,2005,PG,Ongoing,16,7761314.26
+266,Crimson Melody 266,Original Title 266,47,,Movie,Game,2012,PG-13,Announced,16,2786498.96
+267,Silent Melody 267,Original Title 267,10,,OVA,Light Novel,2019,R,Completed,16,3131965.85
+268,Neon Melody 268,Original Title 268,21,,ONA,Web Novel,1998,G,Ongoing,16,4797855.9
+269,Celestial Melody 269,Original Title 269,32,,Series,Original,2005,PG,Announced,16,6819099.19
+270,Clockwork Melody 270,Original Title 270,43,234,Movie,Manga,2012,PG-13,Completed,16,3736412.36
+271,Paper Melody 271,Original Title 271,6,,OVA,Game,2019,R,Ongoing,16,3887589.4
+272,Golden Melody 272,Original Title 272,17,,ONA,Light Novel,1998,G,Announced,16,6060171.51
+273,Midnight Melody 273,Original Title 273,28,,Series,Web Novel,2005,PG,Completed,16,4998584.04
+274,Electric Melody 274,Original Title 274,39,,Movie,Original,2012,PG-13,Ongoing,16,1811130.85
+275,Falling Melody 275,Original Title 275,2,239,OVA,Manga,2019,R,Announced,16,375789.81
+276,Hidden Melody 276,Original Title 276,13,,ONA,Game,1998,G,Completed,16,6190594.93
+277,Azure Guardian 277,Original Title 277,24,,Series,Light Novel,2005,PG,Ongoing,16,2078003.29
+278,Crimson Guardian 278,Original Title 278,35,,Movie,Web Novel,2012,PG-13,Announced,16,4100833.43
+279,Silent Guardian 279,Original Title 279,46,,OVA,Original,2019,R,Completed,16,2703751.63
+280,Neon Guardian 280,Original Title 280,9,244,ONA,Manga,1998,G,Ongoing,16,869981.55
+281,Celestial Guardian 281,Original Title 281,20,,Series,Game,2005,PG,Announced,16,4784901.29
+282,Clockwork Guardian 282,Original Title 282,31,,Movie,Light Novel,2012,PG-13,Completed,16,6612727.71
+283,Paper Guardian 283,Original Title 283,42,,OVA,Web Novel,2019,R,Ongoing,16,5635917.31
+284,Golden Guardian 284,Original Title 284,5,,ONA,Original,1998,G,Announced,16,6677910.3
+285,Midnight Guardian 285,Original Title 285,16,249,Series,Manga,2005,PG,Completed,16,5297553.39
+286,Electric Guardian 286,Original Title 286,27,,Movie,Game,2012,PG-13,Ongoing,16,7698986.51
+287,Falling Guardian 287,Original Title 287,38,,OVA,Light Novel,2019,R,Announced,16,484869.59
+288,Hidden Guardian 288,Original Title 288,1,,ONA,Web Novel,1998,G,Completed,16,5687492.82
+289,Azure Archive 289,Original Title 289,12,,Series,Original,2005,PG,Ongoing,16,7025792.71
+290,Crimson Archive 290,Original Title 290,23,254,Movie,Manga,2012,PG-13,Announced,16,5831154.79
+291,Silent Archive 291,Original Title 291,34,,OVA,Game,2019,R,Completed,16,2129587.05
+292,Neon Archive 292,Original Title 292,45,,ONA,Light Novel,1998,G,Ongoing,16,1467901.85
+293,Celestial Archive 293,Original Title 293,8,,Series,Web Novel,2005,PG,Announced,16,4658668.71
+294,Clockwork Archive 294,Original Title 294,19,,Movie,Original,2012,PG-13,Completed,16,5528567.47
+295,Paper Archive 295,Original Title 295,30,259,OVA,Manga,2019,R,Ongoing,16,2137592.75
+296,Golden Archive 296,Original Title 296,41,,ONA,Game,1998,G,Announced,16,3233312.59
+297,Midnight Archive 297,Original Title 297,4,,Series,Light Novel,2005,PG,Completed,16,4551808.06
+298,Electric Archive 298,Original Title 298,15,,Movie,Web Novel,2012,PG-13,Ongoing,16,5348433.77
+299,Falling Archive 299,Original Title 299,26,,OVA,Original,2019,R,Announced,16,4237573.54
+300,Hidden Archive 300,Original Title 300,37,264,ONA,Manga,1998,G,Completed,16,1560297.79
+301,Azure Horizon 301,Original Title 301,48,,Series,Game,2005,PG,Ongoing,16,416203.29
+302,Crimson Horizon 302,Original Title 302,11,,Movie,Light Novel,2012,PG-13,Announced,16,631757.15
+303,Silent Horizon 303,Original Title 303,22,,OVA,Web Novel,2019,R,Completed,16,1646236.43
+304,Neon Horizon 304,Original Title 304,33,,ONA,Original,1998,G,Ongoing,16,4898897.09
+305,Celestial Horizon 305,Original Title 305,44,269,Series,Manga,2005,PG,Announced,16,953734.84
+306,Clockwork Horizon 306,Original Title 306,7,,Movie,Game,2012,PG-13,Completed,16,256105.59
+307,Paper Horizon 307,Original Title 307,18,,OVA,Light Novel,2019,R,Ongoing,16,6939101.48
+308,Golden Horizon 308,Original Title 308,29,,ONA,Web Novel,1998,G,Announced,16,4785693.72
+309,Midnight Horizon 309,Original Title 309,40,,Series,Original,2005,PG,Completed,16,1974001.64
+310,Electric Horizon 310,Original Title 310,3,274,Movie,Manga,2012,PG-13,Ongoing,16,3675696.04
+311,Falling Horizon 311,Original Title 311,14,,OVA,Game,2019,R,Announced,16,2833916.44
+312,Hidden Horizon 312,Original Title 312,25,,ONA,Light Novel,1998,G,Completed,16,3824399.43
+313,Azure Lantern 313,Original Title 313,36,,Series,Web Novel,2005,PG,Ongoing,16,1521230.92
+314,Crimson Lantern 314,Original Title 314,47,,Movie,Original,2012,PG-13,Announced,16,6118128.34
+315,Silent Lantern 315,Original Title 315,10,279,OVA,Manga,2019,R,Completed,16,4284308.46
+316,Neon Lantern 316,Original Title 316,21,,ONA,Game,1998,G,Ongoing,16,5566100.52
+317,Celestial Lantern 317,Original Title 317,32,,Series,Light Novel,2005,PG,Announced,16,1144968.19
+318,Clockwork Lantern 318,Original Title 318,43,,Movie,Web Novel,2012,PG-13,Completed,16,3051720.97
+319,Paper Lantern 319,Original Title 319,6,,OVA,Original,2019,R,Ongoing,16,3921068.28
+320,Golden Lantern 320,Original Title 320,17,284,ONA,Manga,1998,G,Announced,16,3533738.99
+321,Midnight Lantern 321,Original Title 321,28,,Series,Game,2005,PG,Completed,16,7348828.46
+322,Electric Lantern 322,Original Title 322,39,,Movie,Light Novel,2012,PG-13,Ongoing,16,3236870.62
+323,Falling Lantern 323,Original Title 323,2,,OVA,Web Novel,2019,R,Announced,16,4838524.4
+324,Hidden Lantern 324,Original Title 324,13,,ONA,Original,1998,G,Completed,16,2003231.61
+325,Azure Odyssey 325,Original Title 325,24,289,Series,Manga,2005,PG,Ongoing,16,3623830.52
+326,Crimson Odyssey 326,Original Title 326,35,,Movie,Game,2012,PG-13,Announced,16,1228139.78
+327,Silent Odyssey 327,Original Title 327,46,,OVA,Light Novel,2019,R,Completed,16,5978541.2
+328,Neon Odyssey 328,Original Title 328,9,,ONA,Web Novel,1998,G,Ongoing,16,1985438.74
+329,Celestial Odyssey 329,Original Title 329,20,,Series,Original,2005,PG,Announced,16,5568700.03
+330,Clockwork Odyssey 330,Original Title 330,31,294,Movie,Manga,2012,PG-13,Completed,16,5428788.21
+331,Paper Odyssey 331,Original Title 331,42,,OVA,Game,2019,R,Ongoing,16,4242095.62
+332,Golden Odyssey 332,Original Title 332,5,,ONA,Light Novel,1998,G,Announced,16,6475641.36
+333,Midnight Odyssey 333,Original Title 333,16,,Series,Web Novel,2005,PG,Completed,16,6201728.87
+334,Electric Odyssey 334,Original Title 334,27,,Movie,Original,2012,PG-13,Ongoing,16,243138.0
+335,Falling Odyssey 335,Original Title 335,38,299,OVA,Manga,2019,R,Announced,16,5794272.77
+336,Hidden Odyssey 336,Original Title 336,1,,ONA,Game,1998,G,Completed,16,4070363.46
+337,Azure Protocol 337,Original Title 337,12,,Series,Light Novel,2005,PG,Ongoing,16,765760.32
+338,Crimson Protocol 338,Original Title 338,23,,Movie,Web Novel,2012,PG-13,Announced,16,1603301.04
+339,Silent Protocol 339,Original Title 339,34,,OVA,Original,2019,R,Completed,16,2974612.24
+340,Neon Protocol 340,Original Title 340,45,304,ONA,Manga,1998,G,Ongoing,16,7656026.4
+341,Celestial Protocol 341,Original Title 341,8,,Series,Game,2005,PG,Announced,16,3166827.09
+342,Clockwork Protocol 342,Original Title 342,19,,Movie,Light Novel,2012,PG-13,Completed,16,1509355.01
+343,Paper Protocol 343,Original Title 343,30,,OVA,Web Novel,2019,R,Ongoing,16,2165929.28
+344,Golden Protocol 344,Original Title 344,41,,ONA,Original,1998,G,Announced,16,1423342.87
+345,Midnight Protocol 345,Original Title 345,4,309,Series,Manga,2005,PG,Completed,16,2053383.68
+346,Electric Protocol 346,Original Title 346,15,,Movie,Game,2012,PG-13,Ongoing,16,5031652.47
+347,Falling Protocol 347,Original Title 347,26,,OVA,Light Novel,2019,R,Announced,16,5716367.44
+348,Hidden Protocol 348,Original Title 348,37,,ONA,Web Novel,1998,G,Completed,16,7326287.69
+349,Azure Kingdom 349,Original Title 349,48,,Series,Original,2005,PG,Ongoing,16,976201.17
+350,Crimson Kingdom 350,Original Title 350,11,314,Movie,Manga,2012,PG-13,Announced,16,738514.42
+351,Silent Kingdom 351,Original Title 351,22,,OVA,Game,2019,R,Completed,16,1023962.86
+352,Neon Kingdom 352,Original Title 352,33,,ONA,Light Novel,1998,G,Ongoing,16,1785426.62
+353,Celestial Kingdom 353,Original Title 353,44,,Series,Web Novel,2005,PG,Announced,16,6408739.7
+354,Clockwork Kingdom 354,Original Title 354,7,,Movie,Original,2012,PG-13,Completed,16,3501360.37
+355,Paper Kingdom 355,Original Title 355,18,319,OVA,Manga,2019,R,Ongoing,16,1655540.65
+356,Golden Kingdom 356,Original Title 356,29,,ONA,Game,1998,G,Announced,16,7053806.07
+357,Midnight Kingdom 357,Original Title 357,40,,Series,Light Novel,2005,PG,Completed,16,2402662.12
+358,Electric Kingdom 358,Original Title 358,3,,Movie,Web Novel,2012,PG-13,Ongoing,16,6976489.66
+359,Falling Kingdom 359,Original Title 359,14,,OVA,Original,2019,R,Announced,16,5718396.93
+360,Hidden Kingdom 360,Original Title 360,25,324,ONA,Manga,1998,G,Completed,16,5902132.24

@@ -1,0 +1,79 @@
+[project]
+name = "queryforge"
+dynamic = ["version"]
+description = "A governed AI data analytics and NL2SQL platform for SQLite"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["ai", "analytics", "data-agent", "nl2sql", "semantic-layer", "sqlite"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Natural Language :: English",
+    "Natural Language :: Chinese (Simplified)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=1.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "pydantic>=2.0,<3.0",
+    "PyYAML>=6.0,<7.0",
+    "sqlglot>=27.0,<29.0",
+]
+
+[project.optional-dependencies]
+vector = [
+    "lancedb>=0.20,<1.0",
+]
+api = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn>=0.30,<1.0",
+]
+mcp = [
+    "mcp[cli]>=1.0,<2.0",
+]
+assets = [
+    "pyarrow>=17,<20",
+]
+dev = [
+    "build>=1.2,<2.0",
+    "twine>=5.0,<7.0",
+]
+all = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn>=0.30,<1.0",
+    "mcp[cli]>=1.0,<2.0",
+    "lancedb>=0.20,<1.0",
+    "pyarrow>=17,<20",
+]
+
+[project.scripts]
+queryforge = "queryforge.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["queryforge*"]
+exclude = ["tests*", "sample*", "docs*", "evaluation*"]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = {attr = "queryforge.__version__"}
+
+[tool.setuptools.package-data]
+"queryforge.core" = ["default_models.yml"]
+"queryforge" = [
+    "bundled_skills/*/SKILL.md",
+    "bundled_skills/*/skill.yml",
+]

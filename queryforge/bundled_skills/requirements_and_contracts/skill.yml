@@ -1,0 +1,5 @@
+name: requirements_and_contracts
+description: Translate analytical requirements into explicit grain, keys, metrics, and data contracts.
+allowed_nodes: [plan_mode, gen_sql, reflect]
+enabled: false
+priority: 90

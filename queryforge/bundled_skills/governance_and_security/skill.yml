@@ -1,0 +1,5 @@
+name: governance_and_security
+description: Apply data minimization, sensitive-data handling, lineage, retention, and safe-access rules.
+allowed_nodes: [plan_mode, gen_sql, reflect, fix]
+enabled: false
+priority: 88

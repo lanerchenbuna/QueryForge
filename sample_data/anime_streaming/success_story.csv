@@ -1,0 +1,4 @@
+question,sql
+"What are watch hours by anime format?","SELECT a.content_format, ROUND(SUM(w.watch_seconds) / 3600.0, 2) AS watch_hours FROM fact_watch_session w JOIN dim_episode e ON w.episode_id = e.episode_id JOIN dim_anime a ON e.anime_id = a.anime_id GROUP BY a.content_format ORDER BY watch_hours DESC"
+"What is completion rate by device?","SELECT device_type, ROUND(CAST(SUM(completed_flag) AS REAL) / NULLIF(COUNT(*), 0), 4) AS completion_rate FROM fact_watch_session GROUP BY device_type ORDER BY completion_rate DESC"
+"Which anime titles drive the most merchandise GMV?","SELECT a.title, ROUND(SUM(i.net_amount_usd), 2) AS merch_gmv FROM fact_merch_order_item i JOIN dim_merch_product p ON i.product_id = p.product_id JOIN dim_anime a ON p.anime_id = a.anime_id GROUP BY a.title ORDER BY merch_gmv DESC LIMIT 20"

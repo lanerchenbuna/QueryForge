@@ -1,0 +1,19 @@
+genre_id,genre_name,genre_group,is_mature
+1,Action,High Energy,0
+2,Adventure,High Energy,0
+3,Comedy,Light,0
+4,Drama,Narrative,0
+5,Fantasy,Speculative,0
+6,Romance,Narrative,0
+7,Sci-Fi,Speculative,0
+8,Slice of Life,Light,0
+9,Mystery,Suspense,0
+10,Thriller,Suspense,1
+11,Sports,High Energy,0
+12,Music,Light,0
+13,Historical,Narrative,0
+14,Supernatural,Speculative,0
+15,Mecha,Speculative,0
+16,Iyashikei,Light,0
+17,Isekai,Speculative,0
+18,Cyberpunk,Suspense,1

@@ -1,0 +1,6 @@
+Event ID,Anime Title,Watched At,Watch Seconds,Device Type
+evt-1001,Azure Voyager 001,2026-01-01,1380,Mobile
+evt-1002,Crimson Voyager 002,2026-01-01,920,Web
+evt-1003,Silent Voyager 003,2026-01-02,1440,TV
+evt-1004,Neon Voyager 004,2026-01-02,0,Tablet
+evt-1005,Celestial Voyager 005,2026-01-03,1260,Console

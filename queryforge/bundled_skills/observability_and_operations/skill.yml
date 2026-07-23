@@ -1,0 +1,5 @@
+name: observability_and_operations
+description: Define freshness, volume, failure, lineage, and recovery signals for data pipelines.
+allowed_nodes: [plan_mode, reflect, fix]
+enabled: false
+priority: 55

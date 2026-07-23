@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.svg text
+*.yml text
+*.yaml text
+*.md text diff=markdown
+
+# Large deterministic samples remain versioned but do not flood pull-request diffs
+# or GitHub language statistics.
+sample_data/anime_streaming/tables/*.csv text eol=lf -diff linguist-generated=true
+evaluation/gold/*.jsonl text eol=lf -diff linguist-generated=true

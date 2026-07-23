@@ -1,0 +1,5 @@
+name: data_modeling
+description: Apply reliable dimensional, normalized, and event-modeling rules at the correct grain.
+allowed_nodes: [plan_mode, gen_sql, reflect, fix]
+enabled: false
+priority: 75

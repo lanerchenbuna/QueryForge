@@ -1,0 +1,53 @@
+active_provider: openai
+
+providers:
+  openai:
+    type: openai_compatible
+    model: gpt-4.1-mini
+    api_key_env: OPENAI_API_KEY
+    model_env: OPENAI_MODEL
+    base_url_env: OPENAI_BASE_URL
+
+  claude:
+    type: claude
+    model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
+    model_env: ANTHROPIC_MODEL
+    base_url: https://api.anthropic.com/v1/
+    base_url_env: ANTHROPIC_BASE_URL
+
+  gemini:
+    type: gemini
+    model: gemini-3.5-flash
+    api_key_env: GEMINI_API_KEY
+    model_env: GEMINI_MODEL
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    base_url_env: GEMINI_BASE_URL
+
+  deepseek:
+    type: openai_compatible
+    model: deepseek-v4-flash
+    api_key_env: DEEPSEEK_API_KEY
+    model_env: DEEPSEEK_MODEL
+    base_url: https://api.deepseek.com
+    base_url_env: DEEPSEEK_BASE_URL
+
+  qwen:
+    type: openai_compatible
+    model: qwen-plus
+    api_key_env:
+      - QWEN_API_KEY
+      - DASHSCOPE_API_KEY
+    model_env: QWEN_MODEL
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    base_url_env: QWEN_BASE_URL
+
+  glm:
+    type: openai_compatible
+    model: glm-5.1
+    api_key_env:
+      - GLM_API_KEY
+      - ZAI_API_KEY
+    model_env: GLM_MODEL
+    base_url: https://open.bigmodel.cn/api/paas/v4/
+    base_url_env: GLM_BASE_URL

@@ -1,0 +1,2 @@
+-r requirements.txt
+mcp[cli]>=1.0,<2.0

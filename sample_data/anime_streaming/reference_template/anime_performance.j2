@@ -1,0 +1,11 @@
+SELECT
+    a.title,
+    ROUND(SUM(w.watch_seconds) / 3600.0, 2) AS watch_hours,
+    COUNT(DISTINCT w.user_id) AS unique_viewers
+FROM fact_watch_session AS w
+JOIN dim_episode AS e ON w.episode_id = e.episode_id
+JOIN dim_anime AS a ON e.anime_id = a.anime_id
+WHERE w.watch_date_key BETWEEN {{ start_date_key }} AND {{ end_date_key }}
+GROUP BY a.title
+ORDER BY watch_hours DESC
+LIMIT {{ limit | default(20) }};

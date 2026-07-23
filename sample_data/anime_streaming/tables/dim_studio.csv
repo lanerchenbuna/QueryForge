@@ -1,0 +1,49 @@
+studio_id,studio_name,country,founded_year,studio_tier
+1,Studio A-01,Japan,1972,Indie
+2,Studio B-02,South Korea,1979,Growth
+3,Studio C-03,China,1986,Major
+4,Studio D-04,United States,1993,Indie
+5,Studio E-05,Japan,2000,Growth
+6,Studio F-06,South Korea,2007,Major
+7,Studio G-07,China,2014,Indie
+8,Studio H-08,United States,1965,Growth
+9,Studio I-09,Japan,1972,Major
+10,Studio J-10,South Korea,1979,Indie
+11,Studio K-11,China,1986,Growth
+12,Studio L-12,United States,1993,Major
+13,Studio M-13,Japan,2000,Indie
+14,Studio N-14,South Korea,2007,Growth
+15,Studio O-15,China,2014,Major
+16,Studio P-16,United States,1965,Indie
+17,Studio Q-17,Japan,1972,Growth
+18,Studio R-18,South Korea,1979,Major
+19,Studio S-19,China,1986,Indie
+20,Studio T-20,United States,1993,Growth
+21,Studio U-21,Japan,2000,Major
+22,Studio V-22,South Korea,2007,Indie
+23,Studio W-23,China,2014,Growth
+24,Studio X-24,United States,1965,Major
+25,Studio Y-25,Japan,1972,Indie
+26,Studio Z-26,South Korea,1979,Growth
+27,Studio A-27,China,1986,Major
+28,Studio B-28,United States,1993,Indie
+29,Studio C-29,Japan,2000,Growth
+30,Studio D-30,South Korea,2007,Major
+31,Studio E-31,China,2014,Indie
+32,Studio F-32,United States,1965,Growth
+33,Studio G-33,Japan,1972,Major
+34,Studio H-34,South Korea,1979,Indie
+35,Studio I-35,China,1986,Growth
+36,Studio J-36,United States,1993,Major
+37,Studio K-37,Japan,2000,Indie
+38,Studio L-38,South Korea,2007,Growth
+39,Studio M-39,China,2014,Major
+40,Studio N-40,United States,1965,Indie
+41,Studio O-41,Japan,1972,Growth
+42,Studio P-42,South Korea,1979,Major
+43,Studio Q-43,China,1986,Indie
+44,Studio R-44,United States,1993,Growth
+45,Studio S-45,Japan,2000,Major
+46,Studio T-46,South Korea,2007,Indie
+47,Studio U-47,China,2014,Growth
+48,Studio V-48,United States,1965,Major

@@ -1,0 +1,75 @@
+version: "1.0"
+default_subject: engagement
+subjects:
+  - id: content
+    name: Content catalog analytics
+    description: Anime, episodes, studios, genres, release history, and catalog composition.
+    synonyms: [anime, title, episode, studio, genre, catalog, content, 动漫, 番剧, 工作室, 类型]
+    tables: [dim_anime, dim_episode, dim_studio, dim_genre, bridge_anime_genre, dim_date]
+    entities: [anime, episode, studio, genre, anime_genre, calendar]
+    metrics: [average_rating]
+    skills: [data_modeling]
+    knowledge_sources: [anime_catalog]
+    default_time_field: dim_episode.release_date_key
+    default_grain: anime
+    priority: 10
+  - id: engagement
+    name: Viewer engagement analytics
+    description: Playback, completion, audience reach, ratings, devices, and buffering.
+    synonyms: [watch, viewing, viewer, playback, completion, rating, audience, 观看, 播放, 完播率, 观众]
+    tables: [fact_watch_session, fact_rating, dim_user, dim_episode, dim_anime, dim_studio, dim_date]
+    entities: [watch_session, rating, user, episode, anime, studio, calendar]
+    metrics: [watch_hours, completion_rate, unique_viewers, average_rating]
+    skills: [business_rules, performance_optimization]
+    knowledge_sources: [viewer_engagement]
+    default_time_field: fact_watch_session.watch_date_key
+    default_grain: watch_session
+    priority: 12
+  - id: subscriptions
+    name: Subscription analytics
+    description: Plans, active subscribers, recognized subscription revenue, and cancellations.
+    synonyms: [subscription, subscriber, plan, membership, recurring revenue, 订阅, 会员, 订阅收入]
+    tables: [fact_subscription, dim_user, dim_date]
+    entities: [subscription, user, calendar]
+    metrics: [subscription_revenue, active_subscribers]
+    skills: [business_rules]
+    knowledge_sources: [subscription_monetization]
+    default_time_field: fact_subscription.start_date_key
+    default_grain: subscription
+    priority: 11
+  - id: advertising
+    name: Advertising analytics
+    description: Impressions, placements, advertiser industries, clicks, and ad revenue.
+    synonyms: [ad, advertising, impression, CTR, advertiser, 广告, 曝光, 点击率]
+    tables: [fact_ad_impression, fact_watch_session, dim_anime, dim_studio, dim_user, dim_date]
+    entities: [ad_impression, watch_session, anime, studio, user, calendar]
+    metrics: [ad_revenue, ad_click_through_rate]
+    skills: [business_rules]
+    knowledge_sources: [advertising]
+    default_time_field: fact_ad_impression.impression_date_key
+    default_grain: ad_impression
+    priority: 9
+  - id: commerce
+    name: Merchandise commerce analytics
+    description: Licensed products, merchandise orders, units, GMV, buyers, and anime attribution.
+    synonyms: [merch, merchandise, product, order, GMV, goods, 周边, 商品, 订单]
+    tables: [fact_merch_order, fact_merch_order_item, dim_merch_product, dim_anime, dim_user, dim_date]
+    entities: [merch_order, merch_order_item, merch_product, anime, user, calendar]
+    metrics: [merch_gmv, merch_units]
+    skills: [business_rules]
+    knowledge_sources: [merchandise_commerce]
+    default_time_field: fact_merch_order.order_date_key
+    default_grain: merch_order_item
+    priority: 8
+  - id: community
+    name: Community graph analytics
+    description: Directed user follows, referral relationships, and community surfaces.
+    synonyms: [community, social, follower, follow, referral, 社区, 关注, 粉丝, 推荐]
+    tables: [fact_user_follow, dim_user, dim_date]
+    entities: [user_follow, user, calendar]
+    metrics: [community_follows]
+    skills: [governance_and_security]
+    knowledge_sources: [community_graph]
+    default_time_field: fact_user_follow.follow_date_key
+    default_grain: user_follow
+    priority: 7

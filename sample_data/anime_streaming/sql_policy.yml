@@ -1,0 +1,40 @@
+version: 1
+name: anime_streaming_analyst
+
+allowed_tables:
+  - dim_date
+  - dim_studio
+  - dim_genre
+  - dim_anime
+  - bridge_anime_genre
+  - dim_episode
+  - dim_user
+  - fact_subscription
+  - fact_watch_session
+  - fact_rating
+  - fact_ad_impression
+  - fact_user_follow
+  - dim_merch_product
+  - fact_merch_order
+  - fact_merch_order_item
+
+# PII is withheld while analytical audience attributes remain available.
+allowed_columns:
+  dim_user:
+    - user_id
+    - user_handle
+    - referred_by_user_id
+    - signup_date_key
+    - country
+    - region
+    - age_band
+    - acquisition_channel
+    - preferred_language
+    - marketing_opt_in
+
+dangerous_functions: [randomblob]
+require_limit: false
+max_limit: 1000
+max_tables: 8
+max_joins: 7
+allow_cross_join: false

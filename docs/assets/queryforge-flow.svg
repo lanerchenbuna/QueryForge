@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="570" viewBox="0 0 1400 570" role="img" aria-labelledby="title desc">
+  <title id="title">QueryForge runtime architecture</title>
+  <desc id="desc">Animated architecture diagram showing a request flowing through analysis, candidate generation, governance, execution, quality checks, and delivery.</desc>
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080C19"/>
+      <stop offset=".48" stop-color="#10182C"/>
+      <stop offset="1" stop-color="#07131D"/>
+    </linearGradient>
+    <linearGradient id="pipe" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset=".52" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#2DD4BF"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#131E39"/>
+      <stop offset="1" stop-color="#0C1429"/>
+    </linearGradient>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#93C5FD" fill-opacity=".08"/>
+    </pattern>
+    <filter id="glow2" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0 0v6l7-3Z" fill="#60A5FA"/>
+    </marker>
+    <path id="mainFlow" d="M100 268 H1280"/>
+    <path id="semanticFlow" d="M420 120 V195"/>
+    <path id="policyFlow" d="M780 120 V195"/>
+    <path id="historyFlow" d="M600 450 V344"/>
+    <path id="repairFlow" d="M960 327 C960 420 690 420 690 344"/>
+  </defs>
+
+  <rect width="1400" height="570" rx="24" fill="url(#bg2)"/>
+  <rect width="1400" height="570" rx="24" fill="url(#dots)"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+    <text x="60" y="62" fill="#F8FAFC" font-size="24" font-weight="720">Governed runtime</text>
+    <text x="60" y="88" fill="#64748B" font-size="13" letter-spacing="1.5">DETERMINISTIC ROUTING · BOUNDED AI · READ-ONLY EXECUTION</text>
+    <g transform="translate(1185 48)">
+      <circle cx="0" cy="0" r="5" fill="#2DD4BF" filter="url(#glow2)">
+        <animate attributeName="opacity" values=".35;1;.35" dur="1.8s" repeatCount="indefinite"/>
+      </circle>
+      <text x="14" y="5" fill="#94A3B8" font-size="12" letter-spacing="1">TRACE ACTIVE</text>
+    </g>
+
+    <g>
+      <use href="#mainFlow" fill="none" stroke="#1E3A5F" stroke-width="4"/>
+      <use href="#mainFlow" fill="none" stroke="url(#pipe)" stroke-width="2" stroke-dasharray="10 12" marker-end="url(#arrow)">
+        <animate attributeName="stroke-dashoffset" from="0" to="-44" dur="2s" repeatCount="indefinite"/>
+      </use>
+      <circle r="5" fill="#E0E7FF" filter="url(#glow2)">
+        <animateMotion dur="8s" repeatCount="indefinite"><mpath href="#mainFlow"/></animateMotion>
+      </circle>
+      <circle r="4" fill="#67E8F9" filter="url(#glow2)">
+        <animateMotion dur="8s" begin="-4s" repeatCount="indefinite"><mpath href="#mainFlow"/></animateMotion>
+      </circle>
+    </g>
+
+    <g transform="translate(42 221)">
+      <rect width="142" height="94" rx="18" fill="url(#card)" stroke="#8B5CF6" stroke-opacity=".65"/>
+      <circle cx="28" cy="28" r="13" fill="#8B5CF6" fill-opacity=".16" stroke="#A78BFA"/>
+      <path d="M22 28h12M28 22v12" stroke="#C4B5FD" stroke-width="1.5"/>
+      <text x="50" y="33" fill="#F1F5F9" font-size="15" font-weight="650">Request</text>
+      <text x="20" y="62" fill="#94A3B8" font-size="11">CLI · API · MCP</text>
+      <text x="20" y="79" fill="#64748B" font-size="10">Natural language</text>
+    </g>
+
+    <g transform="translate(218 207)">
+      <rect width="162" height="122" rx="18" fill="url(#card)" stroke="#8B5CF6" stroke-opacity=".45"/>
+      <text x="20" y="31" fill="#C4B5FD" font-size="10" letter-spacing="1.5">01 · ANALYSIS</text>
+      <text x="20" y="59" fill="#F8FAFC" font-size="16" font-weight="650">Route &amp; scope</text>
+      <path d="M20 74h122" stroke="#334155"/>
+      <text x="20" y="94" fill="#94A3B8" font-size="11">Schema linking</text>
+      <text x="20" y="110" fill="#64748B" font-size="10">Complexity · Skills</text>
+    </g>
+
+    <g transform="translate(414 207)">
+      <rect width="162" height="122" rx="18" fill="url(#card)" stroke="#6366F1" stroke-opacity=".55"/>
+      <text x="20" y="31" fill="#A5B4FC" font-size="10" letter-spacing="1.5">02 · CANDIDATE</text>
+      <text x="20" y="59" fill="#F8FAFC" font-size="16" font-weight="650">Generate SQL</text>
+      <path d="M20 74h122" stroke="#334155"/>
+      <text x="20" y="94" fill="#94A3B8" font-size="11">1–3 candidates</text>
+      <text x="20" y="110" fill="#64748B" font-size="10">Bounded tool loop</text>
+    </g>
+
+    <g transform="translate(610 195)">
+      <rect width="170" height="146" rx="20" fill="#101B32" stroke="#60A5FA" stroke-width="1.5"/>
+      <rect x="6" y="6" width="158" height="134" rx="16" fill="none" stroke="#60A5FA" stroke-opacity=".12"/>
+      <g transform="translate(20 18)">
+        <path d="M16 0 30 8v17L16 34 2 25V8Z" fill="#60A5FA" fill-opacity=".15" stroke="#60A5FA"/>
+        <path d="m10 17 4 4 9-10" fill="none" stroke="#93C5FD" stroke-width="2"/>
+      </g>
+      <text x="62" y="39" fill="#BFDBFE" font-size="10" letter-spacing="1.5">03 · GOVERN</text>
+      <text x="20" y="72" fill="#F8FAFC" font-size="17" font-weight="700">AST policy gate</text>
+      <path d="M20 88h130" stroke="#334155"/>
+      <text x="20" y="108" fill="#94A3B8" font-size="11">Read-only · Scope</text>
+      <text x="20" y="125" fill="#94A3B8" font-size="11">Shape · Functions</text>
+    </g>
+
+    <g transform="translate(814 207)">
+      <rect width="162" height="122" rx="18" fill="url(#card)" stroke="#22D3EE" stroke-opacity=".48"/>
+      <text x="20" y="31" fill="#67E8F9" font-size="10" letter-spacing="1.5">04 · EXECUTE</text>
+      <text x="20" y="59" fill="#F8FAFC" font-size="16" font-weight="650">SQLite RO</text>
+      <path d="M20 74h122" stroke="#334155"/>
+      <text x="20" y="94" fill="#94A3B8" font-size="11">Revalidate policy</text>
+      <text x="20" y="110" fill="#64748B" font-size="10">Bounded result set</text>
+    </g>
+
+    <g transform="translate(1010 207)">
+      <rect width="162" height="122" rx="18" fill="url(#card)" stroke="#2DD4BF" stroke-opacity=".5"/>
+      <text x="20" y="31" fill="#5EEAD4" font-size="10" letter-spacing="1.5">05 · COMPLETE</text>
+      <text x="20" y="59" fill="#F8FAFC" font-size="16" font-weight="650">Reflect &amp; QA</text>
+      <path d="M20 74h122" stroke="#334155"/>
+      <text x="20" y="94" fill="#94A3B8" font-size="11">Repair if needed</text>
+      <text x="20" y="110" fill="#64748B" font-size="10">Quality evidence</text>
+    </g>
+
+    <g transform="translate(1206 221)">
+      <rect width="152" height="94" rx="18" fill="#0D2228" stroke="#2DD4BF" stroke-opacity=".65"/>
+      <circle cx="29" cy="28" r="13" fill="#2DD4BF" fill-opacity=".12" stroke="#2DD4BF"/>
+      <path d="m23 28 4 4 8-10" fill="none" stroke="#5EEAD4" stroke-width="2"/>
+      <text x="50" y="33" fill="#F1F5F9" font-size="15" font-weight="650">Deliver</text>
+      <text x="20" y="62" fill="#94A3B8" font-size="11">JSON · SSE · HTML</text>
+      <text x="20" y="79" fill="#64748B" font-size="10">Artifacts · Trace</text>
+    </g>
+
+    <g transform="translate(322 105)">
+      <rect width="196" height="56" rx="14" fill="#15152C" stroke="#8B5CF6" stroke-opacity=".4"/>
+      <circle cx="24" cy="28" r="7" fill="#A78BFA"/>
+      <text x="42" y="25" fill="#DDD6FE" font-size="12" font-weight="650">Semantic layer</text>
+      <text x="42" y="42" fill="#64748B" font-size="10">metrics · grain · joins</text>
+    </g>
+    <use href="#semanticFlow" fill="none" stroke="#8B5CF6" stroke-width="1.5" stroke-dasharray="5 6">
+      <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.8s" repeatCount="indefinite"/>
+    </use>
+
+    <g transform="translate(682 105)">
+      <rect width="196" height="56" rx="14" fill="#101B32" stroke="#60A5FA" stroke-opacity=".45"/>
+      <circle cx="24" cy="28" r="7" fill="#60A5FA"/>
+      <text x="42" y="25" fill="#BFDBFE" font-size="12" font-weight="650">Security policy</text>
+      <text x="42" y="42" fill="#64748B" font-size="10">tables · columns · budgets</text>
+    </g>
+    <use href="#policyFlow" fill="none" stroke="#60A5FA" stroke-width="1.5" stroke-dasharray="5 6">
+      <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.8s" repeatCount="indefinite"/>
+    </use>
+
+    <g transform="translate(501 450)">
+      <rect width="198" height="56" rx="14" fill="#0D1D2C" stroke="#22D3EE" stroke-opacity=".35"/>
+      <circle cx="24" cy="28" r="7" fill="#22D3EE"/>
+      <text x="42" y="25" fill="#CFFAFE" font-size="12" font-weight="650">Context memory</text>
+      <text x="42" y="42" fill="#64748B" font-size="10">history · vectors · sessions</text>
+    </g>
+    <use href="#historyFlow" fill="none" stroke="#22D3EE" stroke-width="1.5" stroke-dasharray="5 6">
+      <animate attributeName="stroke-dashoffset" from="0" to="-22" dur="1.8s" repeatCount="indefinite"/>
+    </use>
+
+    <use href="#repairFlow" fill="none" stroke="#2DD4BF" stroke-opacity=".55" stroke-width="1.5" stroke-dasharray="7 7" marker-end="url(#arrow)">
+      <animate attributeName="stroke-dashoffset" from="0" to="28" dur="2.2s" repeatCount="indefinite"/>
+    </use>
+    <text x="790" y="430" fill="#5EEAD4" font-size="10" letter-spacing="1.2">BOUNDED REPAIR</text>
+
+    <g transform="translate(58 523)">
+      <rect width="1284" height="1" fill="url(#pipe)" opacity=".3"/>
+      <text x="0" y="27" fill="#475569" font-size="10" letter-spacing="1.3">EVERY STAGE EMITS STATE · EVIDENCE · ARTIFACTS · OBSERVABILITY EVENTS</text>
+      <text x="1184" y="27" fill="#64748B" font-size="10" text-anchor="end">QUERYFORGE</text>
+    </g>
+  </g>
+  <rect x=".75" y=".75" width="1398.5" height="568.5" rx="23.25" fill="none" stroke="#93C5FD" stroke-opacity=".14" stroke-width="1.5"/>
+</svg>

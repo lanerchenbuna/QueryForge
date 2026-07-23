@@ -1,0 +1,5 @@
+name: sql_best_practices
+description: Generate safe, readable, deterministic, and efficient analytical SQL.
+allowed_nodes: [gen_sql, reflect, fix]
+enabled: true
+priority: 100

@@ -1,0 +1,48 @@
+version: 1
+semantic_model:
+  name: anime_watch_asset
+  description: Reviewed semantics for uploaded anime playback events.
+  owner: engagement-analytics
+  reviewed: true
+  auto_count_metrics: true
+  metrics:
+    - name: uploaded_watch_hours
+      description: Total uploaded playback duration in hours.
+      entity: watch_events
+      aggregation: sum
+      expression: SUM(fact_watch_events.watch_seconds) / 3600.0
+      allowed_dimensions: [watch_events.anime_title, watch_events.device_type]
+      time_field: fact_watch_events.watched_at
+      owner: engagement-analytics
+      sensitivity: internal
+assets:
+  - name: anime_watch_events
+    target_table: fact_watch_events
+    source:
+      type: csv
+      path: anime_watch_events.csv
+    column_aliases:
+      Event ID: event_id
+      Anime Title: anime_title
+      Watched At: watched_at
+      Watch Seconds: watch_seconds
+    watermark_field: watched_at
+    quality:
+      required_columns: [event_id, anime_title, watched_at, watch_seconds]
+      unique_key: [event_id]
+      max_invalid_ratio: 0.05
+    semantic:
+      entity_name: watch_events
+      entity_type: fact
+      description: Synthetic anime playback events built by the QueryForge asset pipeline.
+      grain: [event_id]
+      dimensions: [event_id, anime_title, watched_at, device_type]
+      contract_version: "1.0"
+      owner: engagement-analytics
+      sla: PT1H
+      refresh_frequency: hourly
+      sensitivity: internal
+      quality_rules:
+        - rule: range
+          column: watch_seconds
+          minimum: 0

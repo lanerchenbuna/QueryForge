@@ -1,0 +1,78 @@
+name: weekly-semantic-layer-check
+
+"on":
+  schedule:
+    # Monday 09:00 Asia/Shanghai (01:00 UTC).
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-semantic-layer-check
+  cancel-in-progress: false
+
+jobs:
+  semantic-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e .
+      - name: Check semantic and data-quality drift
+        id: semantic-check
+        continue-on-error: true
+        run: |
+          python scripts/check_semantic_drift.py \
+            --database sample_data/anime_streaming/anime_streaming.sqlite \
+            --model sample_data/anime_streaming/semantic_model.yml \
+            --baseline sample_data/anime_streaming/semantic_baseline.json \
+            --report semantic-weekly-report.json
+      - name: Add audit summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = Path("semantic-weekly-report.json")
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not report.is_file():
+              summary.write_text(
+                  "# Semantic layer weekly check\n\nStatus: blocked; report was not created.\n"
+              )
+          else:
+              payload = json.loads(report.read_text())
+              changes = payload.get("changes") or []
+              lines = [
+                  "# Semantic layer weekly check",
+                  "",
+                  f"- Status: `{payload['status']}`",
+                  f"- Contract: `{payload['contract']}`",
+                  f"- Changed sections: `{[item['section'] for item in changes]}`",
+                  "- Sources checked: SQLite schema, semantic model, relationships, "
+                  "Join Paths, metrics, and operational quality contracts.",
+                  "- Needs review: inspect the uploaded JSON report when status is "
+                  "`drift_detected` or `contract_failed`.",
+              ]
+              summary.write_text("\n".join(lines) + "\n")
+          PY
+      - name: Upload semantic audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-weekly-report
+          path: semantic-weekly-report.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce audit result
+        if: steps.semantic-check.outcome == 'failure'
+        run: exit 1

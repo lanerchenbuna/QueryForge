@@ -1,0 +1,3052 @@
+{
+  "version": 1,
+  "database": "sample_data/anime_streaming/anime_streaming.sqlite",
+  "semantic_model": "sample_data/anime_streaming/semantic_model.yml",
+  "model_name": "anime_streaming",
+  "fingerprint": "f8920a826149de8dcfb7376e45d4ff70b378609db7c109d88de69f3b9c5dbb50",
+  "sections": {
+    "schema": [
+      {
+        "table_name": "bridge_anime_genre",
+        "columns": [
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "genre_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "genre_weight",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "is_primary",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          },
+          {
+            "column": "genre_id",
+            "referenced_table": "dim_genre",
+            "referenced_column": "genre_id"
+          }
+        ]
+      },
+      {
+        "table_name": "dim_anime",
+        "columns": [
+          {
+            "name": "age_rating",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "content_format",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "episode_count",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "original_title",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "production_budget_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "production_status",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "release_year",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "sequel_of_anime_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "source_material",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "studio_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "title",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "sequel_of_anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          },
+          {
+            "column": "studio_id",
+            "referenced_table": "dim_studio",
+            "referenced_column": "studio_id"
+          }
+        ]
+      },
+      {
+        "table_name": "dim_date",
+        "columns": [
+          {
+            "name": "date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "day_of_week",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "full_date",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "is_weekend",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "month_name",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "month_number",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "quarter",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "week_of_year",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "year",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": []
+      },
+      {
+        "table_name": "dim_episode",
+        "columns": [
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "duration_seconds",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "episode_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "episode_number",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "episode_title",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "is_filler",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "release_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "season_number",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          },
+          {
+            "column": "release_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          }
+        ]
+      },
+      {
+        "table_name": "dim_genre",
+        "columns": [
+          {
+            "name": "genre_group",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "genre_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "genre_name",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "is_mature",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": []
+      },
+      {
+        "table_name": "dim_merch_product",
+        "columns": [
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "license_type",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "list_price_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "product_category",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "product_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "product_name",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "sku",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "unit_cost_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          }
+        ]
+      },
+      {
+        "table_name": "dim_studio",
+        "columns": [
+          {
+            "name": "country",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "founded_year",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "studio_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "studio_name",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "studio_tier",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": []
+      },
+      {
+        "table_name": "dim_user",
+        "columns": [
+          {
+            "name": "acquisition_channel",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "age_band",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "country",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "email",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "marketing_opt_in",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "preferred_language",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "referred_by_user_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "region",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "signup_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "user_handle",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "referred_by_user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          },
+          {
+            "column": "signup_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_ad_impression",
+        "columns": [
+          {
+            "name": "ad_format",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "advertiser_industry",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "clicked_flag",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "completed_flag",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "impression_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "impression_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "placement",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "revenue_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "watch_session_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          },
+          {
+            "column": "impression_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          },
+          {
+            "column": "watch_session_id",
+            "referenced_table": "fact_watch_session",
+            "referenced_column": "watch_session_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_merch_order",
+        "columns": [
+          {
+            "name": "discount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "gross_amount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "net_amount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "order_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "order_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "order_status",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "sales_channel",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "shipping_region",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "shipping_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "order_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_merch_order_item",
+        "columns": [
+          {
+            "name": "discount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "net_amount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "order_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "order_item_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "product_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "quantity",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "unit_price_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "order_id",
+            "referenced_table": "fact_merch_order",
+            "referenced_column": "order_id"
+          },
+          {
+            "column": "product_id",
+            "referenced_table": "dim_merch_product",
+            "referenced_column": "product_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_rating",
+        "columns": [
+          {
+            "name": "anime_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "helpful_votes",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "rating_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "rating_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "review_length",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "score",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "spoiler_flag",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "anime_id",
+            "referenced_table": "dim_anime",
+            "referenced_column": "anime_id"
+          },
+          {
+            "column": "rating_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_subscription",
+        "columns": [
+          {
+            "name": "billing_cycle",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "cancellation_reason",
+            "data_type": "TEXT",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "discount_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "end_date_key",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "monthly_price_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "plan_name",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "recognized_revenue_usd",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "start_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "status",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "subscription_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "end_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "start_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_user_follow",
+        "columns": [
+          {
+            "name": "follow_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "follow_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          },
+          {
+            "name": "followed_user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "follower_user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "source_surface",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "follow_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          },
+          {
+            "column": "followed_user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          },
+          {
+            "column": "follower_user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          }
+        ]
+      },
+      {
+        "table_name": "fact_watch_session",
+        "columns": [
+          {
+            "name": "buffering_seconds",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "completed_flag",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "completion_pct",
+            "data_type": "REAL",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "device_type",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "episode_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "playback_region",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "rewatch_flag",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "started_at",
+            "data_type": "TEXT",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "subscription_id",
+            "data_type": "INTEGER",
+            "nullable": true,
+            "primary_key": false
+          },
+          {
+            "name": "user_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "watch_date_key",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "watch_seconds",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": false
+          },
+          {
+            "name": "watch_session_id",
+            "data_type": "INTEGER",
+            "nullable": false,
+            "primary_key": true
+          }
+        ],
+        "foreign_keys": [
+          {
+            "column": "episode_id",
+            "referenced_table": "dim_episode",
+            "referenced_column": "episode_id"
+          },
+          {
+            "column": "subscription_id",
+            "referenced_table": "fact_subscription",
+            "referenced_column": "subscription_id"
+          },
+          {
+            "column": "user_id",
+            "referenced_table": "dim_user",
+            "referenced_column": "user_id"
+          },
+          {
+            "column": "watch_date_key",
+            "referenced_table": "dim_date",
+            "referenced_column": "date_key"
+          }
+        ]
+      }
+    ],
+    "entities": [
+      {
+        "contract_version": "1.0",
+        "owner": "ads-analytics",
+        "sla": "PT2H",
+        "refresh_frequency": "hourly",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "ad_impression",
+        "table": "fact_ad_impression",
+        "description": "Advertising impression fact with optional viewer and watch-session attribution.",
+        "entity_type": "fact",
+        "synonyms": [
+          "ad",
+          "advertisement",
+          "impression",
+          "advertising"
+        ],
+        "primary_key": [
+          "impression_id"
+        ],
+        "grain": [
+          "impression_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "ad_format",
+          "advertiser_industry",
+          "anime_id",
+          "clicked_flag",
+          "completed_flag",
+          "impression_date_key",
+          "impression_id",
+          "placement",
+          "revenue_usd",
+          "user_id",
+          "watch_session_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "format",
+            "column": "ad_format",
+            "description": "",
+            "synonyms": [
+              "ad format"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "industry",
+            "column": "advertiser_industry",
+            "description": "",
+            "synonyms": [
+              "advertiser industry"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "placement",
+            "column": "placement",
+            "description": "",
+            "synonyms": [
+              "ad placement"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "completed",
+            "column": "completed_flag",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "clicked",
+            "column": "clicked_flag",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "content-analytics",
+        "sensitivity": "public",
+        "quality_rules": [
+          {
+            "rule": "unique",
+            "column": "title",
+            "severity": "error"
+          },
+          {
+            "rule": "range",
+            "column": "episode_count",
+            "minimum": 1.0,
+            "severity": "error"
+          }
+        ],
+        "name": "anime",
+        "table": "dim_anime",
+        "description": "One row per anime title, including self-referencing sequel lineage.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "anime",
+          "title",
+          "show",
+          "series",
+          "movie",
+          "content"
+        ],
+        "primary_key": [
+          "anime_id"
+        ],
+        "grain": [
+          "anime_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "age_rating",
+          "anime_id",
+          "content_format",
+          "episode_count",
+          "original_title",
+          "production_budget_usd",
+          "production_status",
+          "release_year",
+          "sequel_of_anime_id",
+          "source_material",
+          "studio_id",
+          "title"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "title",
+            "column": "title",
+            "description": "",
+            "synonyms": [
+              "anime title",
+              "show title"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "original_title",
+            "column": "original_title",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "format",
+            "column": "content_format",
+            "description": "",
+            "synonyms": [
+              "content format"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "source_material",
+            "column": "source_material",
+            "description": "",
+            "synonyms": [
+              "source"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "release_year",
+            "column": "release_year",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "age_rating",
+            "column": "age_rating",
+            "description": "",
+            "synonyms": [
+              "content rating"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "status",
+            "column": "production_status",
+            "description": "",
+            "synonyms": [
+              "production status"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "episode_count",
+            "column": "episode_count",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "budget",
+            "column": "production_budget_usd",
+            "description": "",
+            "synonyms": [
+              "production budget"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "content-analytics",
+        "sensitivity": "public",
+        "quality_rules": [],
+        "name": "anime_genre",
+        "table": "bridge_anime_genre",
+        "description": "Many-to-many anime-to-genre attribution bridge.",
+        "entity_type": "fact",
+        "synonyms": [
+          "anime genre",
+          "genre assignment"
+        ],
+        "primary_key": [
+          "anime_id",
+          "genre_id"
+        ],
+        "grain": [
+          "anime_id",
+          "genre_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "anime_id",
+          "genre_id",
+          "genre_weight",
+          "is_primary"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "weight",
+            "column": "genre_weight",
+            "description": "",
+            "synonyms": [
+              "genre weight"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "primary",
+            "column": "is_primary",
+            "description": "",
+            "synonyms": [
+              "primary genre"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "data-platform",
+        "sensitivity": "public",
+        "quality_rules": [],
+        "name": "calendar",
+        "table": "dim_date",
+        "description": "Conformed calendar shared by every event and transaction fact.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "date",
+          "calendar",
+          "time",
+          "day"
+        ],
+        "primary_key": [
+          "date_key"
+        ],
+        "grain": [
+          "date_key"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "date_key",
+          "day_of_week",
+          "full_date",
+          "is_weekend",
+          "month_name",
+          "month_number",
+          "quarter",
+          "week_of_year",
+          "year"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "date",
+            "column": "full_date",
+            "description": "",
+            "synonyms": [
+              "full date",
+              "event date"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "year",
+            "column": "year",
+            "description": "",
+            "synonyms": [
+              "calendar year"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "quarter",
+            "column": "quarter",
+            "description": "",
+            "synonyms": [
+              "calendar quarter"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "month",
+            "column": "month_name",
+            "description": "",
+            "synonyms": [
+              "calendar month"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "month_number",
+            "column": "month_number",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "day_of_week",
+            "column": "day_of_week",
+            "description": "",
+            "synonyms": [
+              "weekday"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "weekend",
+            "column": "is_weekend",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "content-analytics",
+        "sensitivity": "public",
+        "quality_rules": [],
+        "name": "episode",
+        "table": "dim_episode",
+        "description": "One row per released episode of an anime title.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "episode",
+          "chapter"
+        ],
+        "primary_key": [
+          "episode_id"
+        ],
+        "grain": [
+          "episode_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "anime_id",
+          "duration_seconds",
+          "episode_id",
+          "episode_number",
+          "episode_title",
+          "is_filler",
+          "release_date_key",
+          "season_number"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "season_number",
+            "column": "season_number",
+            "description": "",
+            "synonyms": [
+              "season"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "episode_number",
+            "column": "episode_number",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "title",
+            "column": "episode_title",
+            "description": "",
+            "synonyms": [
+              "episode title"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "duration_seconds",
+            "column": "duration_seconds",
+            "description": "",
+            "synonyms": [
+              "runtime"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "filler",
+            "column": "is_filler",
+            "description": "",
+            "synonyms": [
+              "filler episode"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "content-analytics",
+        "sensitivity": "public",
+        "quality_rules": [],
+        "name": "genre",
+        "table": "dim_genre",
+        "description": "Governed content genre taxonomy.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "genre",
+          "category",
+          "content category"
+        ],
+        "primary_key": [
+          "genre_id"
+        ],
+        "grain": [
+          "genre_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "genre_group",
+          "genre_id",
+          "genre_name",
+          "is_mature"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "name",
+            "column": "genre_name",
+            "description": "",
+            "synonyms": [
+              "genre name"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "group",
+            "column": "genre_group",
+            "description": "",
+            "synonyms": [
+              "genre group"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "mature",
+            "column": "is_mature",
+            "description": "",
+            "synonyms": [
+              "mature genre"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "commerce-analytics",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "merch_order",
+        "table": "fact_merch_order",
+        "description": "Merchandise order fact at order grain.",
+        "entity_type": "fact",
+        "synonyms": [
+          "merch order",
+          "merchandise order",
+          "purchase",
+          "sale"
+        ],
+        "primary_key": [
+          "order_id"
+        ],
+        "grain": [
+          "order_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "discount_usd",
+          "gross_amount_usd",
+          "net_amount_usd",
+          "order_date_key",
+          "order_id",
+          "order_status",
+          "sales_channel",
+          "shipping_region",
+          "shipping_usd",
+          "user_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "channel",
+            "column": "sales_channel",
+            "description": "",
+            "synonyms": [
+              "sales channel"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "shipping_region",
+            "column": "shipping_region",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "status",
+            "column": "order_status",
+            "description": "",
+            "synonyms": [
+              "order status"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "commerce-analytics",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "merch_order_item",
+        "table": "fact_merch_order_item",
+        "description": "Merchandise order line fact at product-within-order grain.",
+        "entity_type": "fact",
+        "synonyms": [
+          "order item",
+          "order line",
+          "merch unit"
+        ],
+        "primary_key": [
+          "order_item_id"
+        ],
+        "grain": [
+          "order_item_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "discount_usd",
+          "net_amount_usd",
+          "order_id",
+          "order_item_id",
+          "product_id",
+          "quantity",
+          "unit_price_usd"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "quantity",
+            "column": "quantity",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "unit_price",
+            "column": "unit_price_usd",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "commerce-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_product",
+        "table": "dim_merch_product",
+        "description": "Licensed merchandise catalog, optionally associated with an anime title.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "merch product",
+          "merchandise",
+          "product",
+          "item",
+          "goods"
+        ],
+        "primary_key": [
+          "product_id"
+        ],
+        "grain": [
+          "product_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "anime_id",
+          "license_type",
+          "list_price_usd",
+          "product_category",
+          "product_id",
+          "product_name",
+          "sku",
+          "unit_cost_usd"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "name",
+            "column": "product_name",
+            "description": "",
+            "synonyms": [
+              "product name"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "category",
+            "column": "product_category",
+            "description": "",
+            "synonyms": [
+              "product category"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "license_type",
+            "column": "license_type",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "list_price",
+            "column": "list_price_usd",
+            "description": "",
+            "synonyms": [
+              "price"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [
+          {
+            "rule": "range",
+            "column": "score",
+            "minimum": 1.0,
+            "maximum": 10.0,
+            "severity": "error"
+          }
+        ],
+        "name": "rating",
+        "table": "fact_rating",
+        "description": "One user score per anime title.",
+        "entity_type": "fact",
+        "synonyms": [
+          "rating",
+          "review",
+          "score"
+        ],
+        "primary_key": [
+          "rating_id"
+        ],
+        "grain": [
+          "rating_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "anime_id",
+          "helpful_votes",
+          "rating_date_key",
+          "rating_id",
+          "review_length",
+          "score",
+          "spoiler_flag",
+          "user_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "score",
+            "column": "score",
+            "description": "",
+            "synonyms": [
+              "rating score"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "review_length",
+            "column": "review_length",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "helpful_votes",
+            "column": "helpful_votes",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "spoiler",
+            "column": "spoiler_flag",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "content-analytics",
+        "sensitivity": "public",
+        "quality_rules": [],
+        "name": "studio",
+        "table": "dim_studio",
+        "description": "Anime production studio.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "studio",
+          "producer",
+          "production house"
+        ],
+        "primary_key": [
+          "studio_id"
+        ],
+        "grain": [
+          "studio_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "country",
+          "founded_year",
+          "studio_id",
+          "studio_name",
+          "studio_tier"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "name",
+            "column": "studio_name",
+            "description": "",
+            "synonyms": [
+              "studio name"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "country",
+            "column": "country",
+            "description": "",
+            "synonyms": [
+              "studio country"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "founded_year",
+            "column": "founded_year",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "tier",
+            "column": "studio_tier",
+            "description": "",
+            "synonyms": [
+              "studio tier"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "monetization-analytics",
+        "sla": "PT6H",
+        "refresh_frequency": "hourly",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "subscription",
+        "table": "fact_subscription",
+        "description": "Subscription lifecycle fact at one row per user subscription period.",
+        "entity_type": "fact",
+        "synonyms": [
+          "subscription",
+          "membership",
+          "subscriber",
+          "plan"
+        ],
+        "primary_key": [
+          "subscription_id"
+        ],
+        "grain": [
+          "subscription_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "billing_cycle",
+          "cancellation_reason",
+          "discount_usd",
+          "end_date_key",
+          "monthly_price_usd",
+          "plan_name",
+          "recognized_revenue_usd",
+          "start_date_key",
+          "status",
+          "subscription_id",
+          "user_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "plan",
+            "column": "plan_name",
+            "description": "",
+            "synonyms": [
+              "subscription plan"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "billing_cycle",
+            "column": "billing_cycle",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "status",
+            "column": "status",
+            "description": "",
+            "synonyms": [
+              "subscription status"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "cancellation_reason",
+            "column": "cancellation_reason",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "growth-analytics",
+        "sensitivity": "confidential",
+        "quality_rules": [
+          {
+            "rule": "unique",
+            "column": "user_handle",
+            "severity": "error"
+          },
+          {
+            "rule": "null_rate",
+            "column": "country",
+            "max_null_rate": 0.0,
+            "severity": "error"
+          }
+        ],
+        "name": "user",
+        "table": "dim_user",
+        "description": "Viewer account with acquisition and geographic attributes.",
+        "entity_type": "dimension",
+        "synonyms": [
+          "user",
+          "viewer",
+          "member",
+          "audience"
+        ],
+        "primary_key": [
+          "user_id"
+        ],
+        "grain": [
+          "user_id"
+        ],
+        "hidden_columns": [
+          "email"
+        ],
+        "expected_columns": [
+          "acquisition_channel",
+          "age_band",
+          "country",
+          "email",
+          "marketing_opt_in",
+          "preferred_language",
+          "referred_by_user_id",
+          "region",
+          "signup_date_key",
+          "user_handle",
+          "user_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "handle",
+            "column": "user_handle",
+            "description": "",
+            "synonyms": [
+              "username",
+              "user handle"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "country",
+            "column": "country",
+            "description": "",
+            "synonyms": [
+              "viewer country"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "region",
+            "column": "region",
+            "description": "",
+            "synonyms": [
+              "viewer region"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "age_band",
+            "column": "age_band",
+            "description": "",
+            "synonyms": [
+              "age group"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "acquisition_channel",
+            "column": "acquisition_channel",
+            "description": "",
+            "synonyms": [
+              "signup channel"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "language",
+            "column": "preferred_language",
+            "description": "",
+            "synonyms": [
+              "preferred language"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "marketing_opt_in",
+            "column": "marketing_opt_in",
+            "description": "",
+            "synonyms": []
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "community-analytics",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "user_follow",
+        "table": "fact_user_follow",
+        "description": "Directed community edge from a follower account to a followed account.",
+        "entity_type": "fact",
+        "synonyms": [
+          "follow",
+          "follower",
+          "social connection"
+        ],
+        "primary_key": [
+          "follow_id"
+        ],
+        "grain": [
+          "follow_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "follow_date_key",
+          "follow_id",
+          "followed_user_id",
+          "follower_user_id",
+          "source_surface"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "source_surface",
+            "column": "source_surface",
+            "description": "",
+            "synonyms": [
+              "follow source"
+            ]
+          }
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sla": "PT1H",
+        "refresh_frequency": "hourly",
+        "sensitivity": "confidential",
+        "quality_rules": [
+          {
+            "rule": "range",
+            "column": "watch_seconds",
+            "minimum": 0.0,
+            "severity": "error"
+          },
+          {
+            "rule": "range",
+            "column": "completion_pct",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "severity": "error"
+          }
+        ],
+        "name": "watch_session",
+        "table": "fact_watch_session",
+        "description": "Playback fact at one row per user episode session.",
+        "entity_type": "fact",
+        "synonyms": [
+          "watch",
+          "viewing",
+          "playback",
+          "stream",
+          "session"
+        ],
+        "primary_key": [
+          "watch_session_id"
+        ],
+        "grain": [
+          "watch_session_id"
+        ],
+        "hidden_columns": [],
+        "expected_columns": [
+          "buffering_seconds",
+          "completed_flag",
+          "completion_pct",
+          "device_type",
+          "episode_id",
+          "playback_region",
+          "rewatch_flag",
+          "started_at",
+          "subscription_id",
+          "user_id",
+          "watch_date_key",
+          "watch_seconds",
+          "watch_session_id"
+        ],
+        "allow_additive_columns": true,
+        "dimensions": [
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "device",
+            "column": "device_type",
+            "description": "",
+            "synonyms": [
+              "device type"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "playback_region",
+            "column": "playback_region",
+            "description": "",
+            "synonyms": []
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "completed",
+            "column": "completed_flag",
+            "description": "",
+            "synonyms": [
+              "completed view"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "rewatch",
+            "column": "rewatch_flag",
+            "description": "",
+            "synonyms": [
+              "repeat view"
+            ]
+          },
+          {
+            "contract_version": "1.0",
+            "sensitivity": "internal",
+            "quality_rules": [],
+            "name": "buffering_seconds",
+            "column": "buffering_seconds",
+            "description": "",
+            "synonyms": [
+              "buffering"
+            ]
+          }
+        ]
+      }
+    ],
+    "metrics": [
+      {
+        "contract_version": "1.0",
+        "owner": "monetization-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "active_subscribers",
+        "description": "Distinct users with an active subscription record.",
+        "entity": "subscription",
+        "aggregation": "count",
+        "expression": "COUNT(DISTINCT fact_subscription.user_id)",
+        "synonyms": [
+          "active subscribers",
+          "paid members"
+        ],
+        "default_filters": [
+          "fact_subscription.status = 'Active'"
+        ],
+        "allowed_dimensions": [
+          "subscription.plan",
+          "subscription.billing_cycle",
+          "user.region",
+          "user.acquisition_channel"
+        ],
+        "time_field": "fact_subscription.start_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "ads-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "ad_click_through_rate",
+        "description": "Clicked impressions divided by all ad impressions.",
+        "entity": "ad_impression",
+        "aggregation": "ratio",
+        "expression": "CAST(SUM(fact_ad_impression.clicked_flag) AS REAL) / NULLIF(COUNT(*), 0)",
+        "synonyms": [
+          "ad click through rate",
+          "ad CTR",
+          "CTR"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "ad_impression.format",
+          "ad_impression.industry",
+          "ad_impression.placement",
+          "anime.format",
+          "user.region",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_ad_impression.impression_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "ads-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "ad_revenue",
+        "description": "Advertising revenue recognized per impression in US dollars.",
+        "entity": "ad_impression",
+        "aggregation": "sum",
+        "expression": "SUM(fact_ad_impression.revenue_usd)",
+        "synonyms": [
+          "ad revenue",
+          "advertising revenue"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "ad_impression.format",
+          "ad_impression.industry",
+          "ad_impression.placement",
+          "anime.title",
+          "anime.format",
+          "studio.name",
+          "user.region",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_ad_impression.impression_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "average_rating",
+        "description": "Mean user rating score on a one-to-ten scale.",
+        "entity": "rating",
+        "aggregation": "ratio",
+        "expression": "CAST(SUM(fact_rating.score) AS REAL) / NULLIF(COUNT(*), 0)",
+        "synonyms": [
+          "average rating",
+          "mean score",
+          "audience score"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "anime.title",
+          "anime.format",
+          "anime.release_year",
+          "user.region",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_rating.rating_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "community-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "community_follows",
+        "description": "Count of directed user-to-user follow connections.",
+        "entity": "user_follow",
+        "aggregation": "count",
+        "expression": "COUNT(DISTINCT fact_user_follow.follow_id)",
+        "synonyms": [
+          "community follows",
+          "follow connections",
+          "social follows"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "user_follow.source_surface",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_user_follow.follow_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "completion_rate",
+        "description": "Completed playback sessions divided by all playback sessions.",
+        "entity": "watch_session",
+        "aggregation": "ratio",
+        "expression": "CAST(SUM(fact_watch_session.completed_flag) AS REAL) / NULLIF(COUNT(*), 0)",
+        "synonyms": [
+          "completion rate",
+          "completed view rate"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "watch_session.device",
+          "watch_session.playback_region",
+          "user.region",
+          "anime.title",
+          "anime.format",
+          "studio.name",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_watch_session.watch_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "commerce-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_gmv",
+        "description": "Merchandise line net amount before order-level shipping.",
+        "entity": "merch_order_item",
+        "aggregation": "sum",
+        "expression": "SUM(fact_merch_order_item.net_amount_usd)",
+        "synonyms": [
+          "merch GMV",
+          "merchandise revenue",
+          "merchandise sales"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "merch_product.category",
+          "merch_product.license_type",
+          "anime.title",
+          "anime.format",
+          "user.region",
+          "user.age_band",
+          "calendar.year",
+          "calendar.month"
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "commerce-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_units",
+        "description": "Total merchandise units purchased at order-line grain.",
+        "entity": "merch_order_item",
+        "aggregation": "sum",
+        "expression": "SUM(fact_merch_order_item.quantity)",
+        "synonyms": [
+          "merch units",
+          "merchandise units",
+          "units sold"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "merch_product.category",
+          "merch_product.license_type",
+          "anime.title",
+          "user.region",
+          "calendar.year",
+          "calendar.month"
+        ]
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "monetization-analytics",
+        "sensitivity": "confidential",
+        "quality_rules": [],
+        "name": "subscription_revenue",
+        "description": "Recognized subscription revenue in US dollars.",
+        "entity": "subscription",
+        "aggregation": "sum",
+        "expression": "SUM(fact_subscription.recognized_revenue_usd)",
+        "synonyms": [
+          "subscription revenue",
+          "membership revenue"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "subscription.plan",
+          "subscription.status",
+          "subscription.billing_cycle",
+          "user.country",
+          "user.region",
+          "user.acquisition_channel",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_subscription.start_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "unique_viewers",
+        "description": "Distinct users with at least one watch session.",
+        "entity": "watch_session",
+        "aggregation": "count",
+        "expression": "COUNT(DISTINCT fact_watch_session.user_id)",
+        "synonyms": [
+          "unique viewers",
+          "viewers",
+          "audience reach"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "watch_session.playback_region",
+          "user.country",
+          "user.region",
+          "anime.title",
+          "anime.format",
+          "studio.name",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_watch_session.watch_date_key"
+      },
+      {
+        "contract_version": "1.0",
+        "owner": "engagement-analytics",
+        "sla": "PT1H",
+        "refresh_frequency": "hourly",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "watch_hours",
+        "description": "Total playback seconds converted to hours at watch-session grain.",
+        "entity": "watch_session",
+        "aggregation": "sum",
+        "expression": "SUM(fact_watch_session.watch_seconds) / 3600.0",
+        "synonyms": [
+          "watch hours",
+          "viewing hours",
+          "hours watched",
+          "stream time"
+        ],
+        "default_filters": [],
+        "allowed_dimensions": [
+          "watch_session.device",
+          "watch_session.playback_region",
+          "watch_session.rewatch",
+          "user.country",
+          "user.region",
+          "user.age_band",
+          "anime.title",
+          "anime.format",
+          "anime.release_year",
+          "studio.name",
+          "calendar.year",
+          "calendar.month"
+        ],
+        "time_field": "fact_watch_session.watch_date_key"
+      }
+    ],
+    "relationships": [
+      {
+        "name": "ads_to_anime",
+        "from": "fact_ad_impression.anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ads_to_date",
+        "from": "fact_ad_impression.impression_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ads_to_user",
+        "from": "fact_ad_impression.user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ads_to_watch_session",
+        "from": "fact_ad_impression.watch_session_id",
+        "to": "fact_watch_session.watch_session_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "anime_genres_to_anime",
+        "from": "bridge_anime_genre.anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "anime_genres_to_genre",
+        "from": "bridge_anime_genre.genre_id",
+        "to": "dim_genre.genre_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "anime_to_prequel",
+        "from": "dim_anime.sequel_of_anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "anime_to_studio",
+        "from": "dim_anime.studio_id",
+        "to": "dim_studio.studio_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "episodes_to_anime",
+        "from": "dim_episode.anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "episodes_to_release_date",
+        "from": "dim_episode.release_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "follows_to_date",
+        "from": "fact_user_follow.follow_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "follows_to_followed_user",
+        "from": "fact_user_follow.followed_user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "follows_to_follower",
+        "from": "fact_user_follow.follower_user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "merch_items_to_order",
+        "from": "fact_merch_order_item.order_id",
+        "to": "fact_merch_order.order_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "merch_items_to_product",
+        "from": "fact_merch_order_item.product_id",
+        "to": "dim_merch_product.product_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "merch_orders_to_date",
+        "from": "fact_merch_order.order_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "merch_orders_to_user",
+        "from": "fact_merch_order.user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "merch_products_to_anime",
+        "from": "dim_merch_product.anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ratings_to_anime",
+        "from": "fact_rating.anime_id",
+        "to": "dim_anime.anime_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ratings_to_date",
+        "from": "fact_rating.rating_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "ratings_to_user",
+        "from": "fact_rating.user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "subscriptions_to_end_date",
+        "from": "fact_subscription.end_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "subscriptions_to_start_date",
+        "from": "fact_subscription.start_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "subscriptions_to_user",
+        "from": "fact_subscription.user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "users_to_referrer",
+        "from": "dim_user.referred_by_user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "users_to_signup_date",
+        "from": "dim_user.signup_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "watches_to_date",
+        "from": "fact_watch_session.watch_date_key",
+        "to": "dim_date.date_key",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "watches_to_episode",
+        "from": "fact_watch_session.episode_id",
+        "to": "dim_episode.episode_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "watches_to_subscription",
+        "from": "fact_watch_session.subscription_id",
+        "to": "fact_subscription.subscription_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      },
+      {
+        "name": "watches_to_user",
+        "from": "fact_watch_session.user_id",
+        "to": "dim_user.user_id",
+        "relationship_type": "many_to_one",
+        "cardinality_contract": {
+          "source": "many",
+          "target": "one",
+          "enforcement": "physical_fk"
+        },
+        "description": ""
+      }
+    ],
+    "join_paths": [
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "ads_to_studio_via_anime",
+        "from_entity": "ad_impression",
+        "to_entity": "studio",
+        "relationships": [
+          "ads_to_anime",
+          "anime_to_studio"
+        ],
+        "description": "Safe path from ad impressions to content studios."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_items_to_anime_via_product",
+        "from_entity": "merch_order_item",
+        "to_entity": "anime",
+        "relationships": [
+          "merch_items_to_product",
+          "merch_products_to_anime"
+        ],
+        "description": "Safe path from merchandise lines to licensed anime titles."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_items_to_date_via_order",
+        "from_entity": "merch_order_item",
+        "to_entity": "calendar",
+        "relationships": [
+          "merch_items_to_order",
+          "merch_orders_to_date"
+        ],
+        "description": "Safe path from merchandise lines to order dates."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "merch_items_to_user_via_order",
+        "from_entity": "merch_order_item",
+        "to_entity": "user",
+        "relationships": [
+          "merch_items_to_order",
+          "merch_orders_to_user"
+        ],
+        "description": "Safe path from merchandise lines to purchasing users."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "watches_to_anime_via_episode",
+        "from_entity": "watch_session",
+        "to_entity": "anime",
+        "relationships": [
+          "watches_to_episode",
+          "episodes_to_anime"
+        ],
+        "description": "Safe many-to-one path from a playback session to its anime title."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "watches_to_release_date_via_episode",
+        "from_entity": "watch_session",
+        "to_entity": "calendar",
+        "relationships": [
+          "watches_to_episode",
+          "episodes_to_release_date"
+        ],
+        "description": "Episode release calendar path; distinct from the watch-event calendar."
+      },
+      {
+        "contract_version": "1.0",
+        "sensitivity": "internal",
+        "quality_rules": [],
+        "name": "watches_to_studio_via_episode_anime",
+        "from_entity": "watch_session",
+        "to_entity": "studio",
+        "relationships": [
+          "watches_to_episode",
+          "episodes_to_anime",
+          "anime_to_studio"
+        ],
+        "description": "Safe many-to-one path from playback to the producing studio."
+      }
+    ]
+  }
+}
