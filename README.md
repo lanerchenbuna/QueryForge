@@ -21,13 +21,16 @@ policy enforcement, bounded recovery, and production-friendly delivery interface
 
 ---
 
-QueryForge is a local-first AI data analytics platform built around one principle:
+QueryForge is a local-first, domain-first AI data analytics platform built around
+one principle:
 **generated SQL should be governed like application code, not trusted like prose**.
 
-It combines natural-language-to-SQL with semantic contracts, AST-level security,
-read-only execution, multi-candidate selection, repair budgets, and complete run
-artifacts. The result is a reference implementation for building AI data systems
-that are useful, inspectable, and difficult to misuse.
+Users create or select a data domain first—such as retail, finance, product, or
+the bundled Anime Streaming sample—then onboard that domain's data, review its
+semantic contract, and ask questions inside the same governance boundary.
+QueryForge combines that workflow with natural-language-to-SQL, AST-level
+security, read-only execution, multi-candidate selection, repair budgets, and
+complete run artifacts.
 
 > QueryForge currently targets SQLite and controlled environments. It is a
 > portfolio-grade reference architecture, not a multi-tenant analytics service.
@@ -35,8 +38,15 @@ that are useful, inspectable, and difficult to misuse.
 ## Product Tour
 
 <div align="center">
+  <img src="docs/assets/queryforge-studio-domains.png" width="100%" alt="QueryForge Data Domain Center for creating and selecting isolated business contexts">
+  <sub>Data Domain Center — create or select a governed context before adding data or semantics.</sub>
+</div>
+
+<br>
+
+<div align="center">
   <img src="docs/assets/queryforge-studio-overview.png" width="100%" alt="QueryForge Studio overview with semantic health, business metrics, and engagement trends">
-  <sub>Workspace overview — live semantic health, governed metrics, and anime-platform activity.</sub>
+  <sub>Domain overview — the Anime Streaming dataset is shown as one selected sample, not the platform identity.</sub>
 </div>
 
 <br>
@@ -57,6 +67,7 @@ delivery loop:
 | --- | --- |
 | Trust the generated SQL | Parse with SQLGlot and enforce a named policy before execution |
 | Keep business meaning consistent | Define metrics, dimensions, grain, and join paths in YAML |
+| Prevent context from leaking | Scope sources, semantic contracts, policies, and run history to a selected data domain |
 | Recover from imperfect output | Reflect, repair, and retry within explicit budgets |
 | Handle harder questions | Use bounded schema discovery and parallel SQL candidates |
 | Trace what happened | Persist run state, policy decisions, quality evidence, and artifacts |
@@ -127,9 +138,10 @@ queryforge \
 
 ### Explore QueryForge Studio
 
-The repository now includes a complete visual workspace for onboarding data,
-reviewing the required semantic layer, asking governed questions, inspecting SQL
-and Trust Trace evidence, and auditing run history.
+The repository includes a complete visual workspace for creating and switching
+data domains, onboarding domain-owned data, reviewing the required semantic
+layer, asking governed questions, inspecting SQL and Trust Trace evidence, and
+auditing domain-scoped run history.
 
 ```bash
 # Terminal 1: QueryForge API
@@ -141,9 +153,10 @@ make web-install
 make web-dev
 ```
 
-Open <http://localhost:3000>. If the Python API is offline, the interface
-automatically uses a deterministic demo response so every screen remains
-explorable. See the [Studio guide](docs/studio.md).
+Open <http://localhost:3000>. Start in **Data Domains**, select the bundled Anime
+Streaming example or create a clean domain, then add data inside that domain. If
+the Python API is offline, the sample-domain analysis remains explorable with a
+deterministic demo response. See the [Studio guide](docs/studio.md).
 
 ## How It Works
 
@@ -217,6 +230,23 @@ QueryForge requires a validated model by default; it auto-discovers a model besi
 the database and rejects schema-only analysis unless the caller explicitly selects
 the diagnostic escape hatch.
 
+In Studio, semantic construction is domain-first and gated:
+
+```text
+Create/select domain
+  → upload domain-owned sources
+  → profile physical schema
+  → confirm entity identity and grain
+  → define dimensions, measures, metrics, and time
+  → review relationships, cardinality, and Join Paths
+  → classify sensitivity, ownership, policy, and quality
+  → validate 100% of blocking checks
+  → publish data + semantics atomically
+```
+
+Technical names are treated as evidence, not business truth. A new domain starts
+empty and never inherits the Anime sample's entities or metrics.
+
 Build or incrementally refresh one:
 
 ```bash
@@ -235,9 +265,10 @@ The repository also includes a Monday-morning
 metrics, relationships, Join Paths, and data-quality contracts against a reviewed
 baseline.
 
-### Anime platform showcase
+### Bundled sample domain: Anime Streaming
 
-The bundled dataset is purpose-built for QueryForge and fully synthetic: **370,762
+Anime Streaming is one ready-to-run example data domain, not a product-wide
+schema. The dataset is purpose-built for QueryForge and fully synthetic: **370,762
 rows**, **15 tables**, **30 declared relationships**, **7 governed Join Paths**, and
 **11 business metrics** across content, engagement, subscriptions, advertising,
 community, and merchandise.
@@ -340,7 +371,7 @@ python -m queryforge.interfaces.mcp.server --transport stdio
 
 | Surface | Entry point | Best for |
 | --- | --- | --- |
-| Studio | `make web-dev` | Visual onboarding, semantic authoring, and governed analysis |
+| Studio | `make web-dev` | Data-domain management, visual onboarding, semantic authoring, and governed analysis |
 | CLI | `queryforge --question "..."` | Local exploration and engineering workflows |
 | REST | `POST /ask` and `POST /plan` | Application integration |
 | SSE | `POST /ask/stream` | Progress-aware clients |

@@ -15,6 +15,13 @@
       "when": 1784834226904,
       "tag": "0001_past_iron_lad",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784885121869,
+      "tag": "0002_brave_gamora",
+      "breakpoints": true
     }
   ]
 }

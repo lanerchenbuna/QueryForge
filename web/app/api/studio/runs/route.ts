@@ -1,17 +1,21 @@
 import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const domainId = new URL(request.url).searchParams.get("domain_id");
     const { db } = getStudioBindings();
     await ensureStudioSchema(db);
-    const result = await db
-      .prepare(
-        `SELECT id, question, status, model, row_count, duration, created_at
-         FROM studio_runs
-         ORDER BY created_at DESC
-         LIMIT 50`,
-      )
-      .all();
+    const statement = db.prepare(
+      `SELECT id, domain_id, question, status, model, row_count, duration,
+              created_at
+       FROM studio_runs
+       ${domainId ? "WHERE domain_id = ?" : ""}
+       ORDER BY created_at DESC
+       LIMIT 50`,
+    );
+    const result = domainId
+      ? await statement.bind(domainId).all()
+      : await statement.all();
     return Response.json({ runs: result.results });
   } catch (error) {
     return Response.json(
@@ -29,15 +33,16 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as {
       id?: string;
+      domainId?: string;
       question?: string;
       status?: string;
       model?: string;
       rowCount?: number;
       duration?: string;
     };
-    if (!payload.id || !payload.question) {
+    if (!payload.id || !payload.domainId || !payload.question) {
       return Response.json(
-        { detail: "Run id and question are required." },
+        { detail: "Run id, data domain, and question are required." },
         { status: 400 },
       );
     }
@@ -46,11 +51,12 @@ export async function POST(request: Request) {
     await db
       .prepare(
         `INSERT OR REPLACE INTO studio_runs (
-          id, question, status, model, row_count, duration
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+          id, domain_id, question, status, model, row_count, duration
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         payload.id,
+        payload.domainId,
         payload.question,
         payload.status ?? "Passed",
         payload.model ?? "configured model",
