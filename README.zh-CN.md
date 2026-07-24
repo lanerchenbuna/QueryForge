@@ -395,7 +395,6 @@ CI 会在 Python 3.11 和 3.12 上执行离线验收。
 | 评测 | [NL2SQL 评测](docs/nl2sql_evaluation.md) |
 | 报告 | [报告产物](docs/report_artifact.md) |
 | 主题域裁剪 | [Subject Tree](docs/subject_tree.md) |
-| 验收 | [最终验收](docs/phase2_final_acceptance.md) |
 | GitHub 发布 | [首次发布清单](docs/github_release.md) |
 | 文档索引 | [全部指南](docs/README.md) |
 

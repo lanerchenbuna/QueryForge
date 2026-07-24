@@ -415,7 +415,6 @@ CI runs the offline acceptance gate on Python 3.11 and 3.12.
 | Evaluation | [NL2SQL evaluation](docs/nl2sql_evaluation.md) |
 | Reports | [Report artifacts](docs/report_artifact.md) |
 | Subject scoping | [Subject tree](docs/subject_tree.md) |
-| Verification | [Final acceptance](docs/phase2_final_acceptance.md) |
 | GitHub release | [First-publish checklist](docs/github_release.md) |
 | Documentation index | [All guides](docs/README.md) |
 

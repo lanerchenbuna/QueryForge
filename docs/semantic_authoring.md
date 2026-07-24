@@ -139,9 +139,6 @@ timezone, attribution window, denominator, late-arriving-data policy, or whether
 heuristic relationship is analytically valid. Those definitions belong in reviewed
 metrics, filters, Join Paths, ownership, freshness, and quality contracts.
 
-The provenance used for this implementation is recorded in
-[Semantic source inventory](semantic_source_inventory.md).
-
 ## Weekly Drift Monitoring
 
 The checked-in [weekly workflow](../.github/workflows/semantic-weekly.yml) runs every
