@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "openai>=1.0,<3.0",
+    "openai>=2.48.0,<3.0",
     "python-dotenv>=1.0,<2.0",
     "pydantic>=2.0,<3.0",
     "PyYAML>=6.0,<7.0",
