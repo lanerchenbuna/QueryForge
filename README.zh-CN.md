@@ -21,11 +21,12 @@
 
 ---
 
-QueryForge 是一个本地优先的 AI 数据分析平台，它围绕一个核心原则设计：
+QueryForge 是一个本地优先、以数据域为第一入口的 AI 数据分析平台，它围绕一个核心原则设计：
 **模型生成的 SQL 应该像应用代码一样被治理，而不是像自然语言一样被直接信任。**
 
-项目将 NL2SQL、语义契约、AST 级安全策略、只读执行、多候选选择、有界修复和完整
-运行产物串成一个闭环，适合作为可信 AI 数据系统的参考实现。
+用户先创建或选择数据域（如零售、金融、产品分析，或仓库内置的 Anime Streaming
+示例域），再在该域内上传数据、评审语义契约和发起分析。项目把这套域级工作流与
+NL2SQL、AST 级安全策略、只读执行、多候选选择、有界修复和完整运行产物串成闭环。
 
 > QueryForge 当前专注 SQLite 和受控环境，是面向作品展示与架构验证的参考项目，
 > 不是可直接公网部署的多租户分析服务。
@@ -33,8 +34,15 @@ QueryForge 是一个本地优先的 AI 数据分析平台，它围绕一个核�
 ## 产品界面
 
 <div align="center">
+  <img src="docs/assets/queryforge-studio-domains.png" width="100%" alt="QueryForge 数据域中心：创建和选择相互隔离的业务上下文">
+  <sub>数据域中心——先创建或选择治理边界，再接入该域的数据与语义。</sub>
+</div>
+
+<br>
+
+<div align="center">
   <img src="docs/assets/queryforge-studio-overview.png" width="100%" alt="QueryForge Studio 总览：语义契约健康度、业务指标与互动趋势">
-  <sub>工作台总览——实时展示语义健康度、受治理指标和动漫平台业务动态。</sub>
+  <sub>数据域总览——Anime Streaming 只是当前选中的示例域，不再是平台身份。</sub>
 </div>
 
 <br>
@@ -54,6 +62,7 @@ QueryForge 是一个本地优先的 AI 数据分析平台，它围绕一个核�
 | --- | --- |
 | 如何信任生成的 SQL | 使用 SQLGlot 解析 AST，执行前应用具名安全策略 |
 | 如何保证业务口径一致 | 用 YAML 定义指标、维度、粒度和 Join Path |
+| 如何防止上下文串域 | 数据源、语义契约、策略和运行历史全部绑定当前数据域 |
 | 模型输出不完美怎么办 | 在明确预算内反思、修复和重试 |
 | 复杂问题如何处理 | 启用有界 Schema 探索和并发 SQL 候选 |
 | 如何追踪运行过程 | 保存状态、策略决策、质量证据和交付产物 |
@@ -119,8 +128,9 @@ queryforge \
 
 ### 体验 QueryForge Studio
 
-仓库现在包含一个完整的可视化工作台：可以接入数据、评审强制语义层、提出受治理的
-自然语言问题、检查 SQL 与 Trust Trace 证据，并审计历史运行。
+仓库现在包含一个完整的可视化工作台：可以创建和切换数据域、在域内接入数据、评审
+强制语义层、提出受治理的自然语言问题、检查 SQL 与 Trust Trace 证据，并审计域内
+历史运行。
 
 ```bash
 # 终端 1：QueryForge API
@@ -132,8 +142,9 @@ make web-install
 make web-dev
 ```
 
-打开 <http://localhost:3000>。Python API 离线时，界面会自动使用确定性的演示结果，
-所有页面仍然可以完整体验。详见 [Studio 使用指南](docs/studio.md)。
+打开 <http://localhost:3000>，从「Data Domains」进入：可选择内置 Anime Streaming
+示例域，也可创建一个完全空白的新域，然后只在当前域内上传数据。Python API 离线时，
+示例域分析会使用确定性的演示结果。详见 [Studio 使用指南](docs/studio.md)。
 
 ## 系统架构
 
@@ -203,6 +214,23 @@ metrics:
 物理质量规则。QueryForge 现在默认强制使用经过校验的语义模型，并自动发现数据库旁边
 的模型；除非显式启用诊断逃生口，否则不允许只依赖裸 Schema 查询。
 
+Studio 中的语义层构建是「域优先 + 强门禁」流程：
+
+```text
+创建/选择数据域
+  → 上传该域数据
+  → Profiling 物理结构
+  → 确认实体身份和行粒度
+  → 定义维度、度量、指标和时间口径
+  → 评审关系、基数和 Join Path
+  → 标注敏感级别、Owner、策略和质量规则
+  → 通过全部阻断性检查
+  → 数据 + 语义原子发布
+```
+
+技术字段名只作为推断证据，不能替代业务定义。新建域从空白契约开始，绝不会继承
+Anime 示例域的实体或指标。
+
 创建或增量更新语义层：
 
 ```bash
@@ -219,9 +247,10 @@ python scripts/build_semantic_model.py \
 [语义漂移检查](.github/workflows/semantic-weekly.yml)，会基于审核后的基线检查
 Schema、指标、关系、Join Path 和数据质量契约。
 
-### 动漫平台数据集
+### 内置示例数据域：Anime Streaming
 
-内置样例是专为 QueryForge 构造的全合成数据：**370,762 行**、**15 张表**、
+Anime Streaming 是一个开箱即用的示例数据域，不是全平台 Schema。其数据是专为
+QueryForge 构造的全合成数据：**370,762 行**、**15 张表**、
 **30 条声明关系**、**7 条受治理 Join Path**、**11 个业务指标**，覆盖内容、
 观看、订阅、广告、社区和动漫周边。
 
@@ -321,7 +350,7 @@ python -m queryforge.interfaces.mcp.server --transport stdio
 
 | 方式 | 入口 | 适合场景 |
 | --- | --- | --- |
-| Studio | `make web-dev` | 可视化数据接入、语义编写与受治理分析 |
+| Studio | `make web-dev` | 数据域管理、可视化接入、语义编写与受治理分析 |
 | CLI | `queryforge --question "..."` | 本地探索和工程工作流 |
 | REST | `POST /ask`、`POST /plan` | 应用集成 |
 | SSE | `POST /ask/stream` | 需要进度事件的客户端 |

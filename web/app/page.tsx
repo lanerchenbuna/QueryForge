@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-type View = "overview" | "sources" | "semantic" | "ask" | "runs";
+type View = "domains" | "overview" | "sources" | "semantic" | "ask" | "runs";
 type ConnectionState = "checking" | "live" | "demo";
 type SemanticTab = "graph" | "metrics" | "paths";
 
@@ -47,6 +47,7 @@ type QueryResult = {
 
 type RunRecord = {
   id: string;
+  domainId: string;
   question: string;
   status: "Passed" | "Blocked" | "Running";
   model: string;
@@ -57,6 +58,7 @@ type RunRecord = {
 
 type UploadedSource = {
   id: string;
+  domainId: string;
   name: string;
   type: string;
   size: string;
@@ -65,17 +67,87 @@ type UploadedSource = {
   status: "Ready" | "Draft";
 };
 
+type DataDomain = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  owner: string;
+  status: "ready" | "draft";
+  isSample: boolean;
+  sourceCount: number;
+  runCount: number;
+};
+
+type SemanticDraft = {
+  entity: string;
+  description: string;
+  owner: string;
+  grain: string;
+  primaryKey: string;
+  sensitivity: "public" | "internal" | "restricted";
+  dimensions: string[];
+  metrics: Array<{
+    name: string;
+    description: string;
+    aggregation: "count" | "sum";
+    expression: string;
+  }>;
+};
+
+const SAMPLE_DOMAIN_ID = "domain_anime_streaming";
+
+const INITIAL_SEMANTIC_DRAFT: SemanticDraft = {
+  entity: "uploaded_record",
+  description: "One governed business record represented by the uploaded source.",
+  owner: "workspace-admin",
+  grain: "record_id",
+  primaryKey: "record_id",
+  sensitivity: "internal",
+  dimensions: ["record_id", "entity_id", "recorded_at"],
+  metrics: [
+    {
+      name: "uploaded_record_count",
+      description: "Count of reviewed records at the declared grain.",
+      aggregation: "count",
+      expression: "COUNT(*)",
+    },
+    {
+      name: "uploaded_amount_sum",
+      description: "Sum of the profiled amount field in source-native units.",
+      aggregation: "sum",
+      expression: "SUM(amount)",
+    },
+  ],
+};
+
 const NAV_ITEMS: Array<{
   id: View;
   label: string;
   caption: string;
   icon: string;
 }> = [
+  { id: "domains", label: "Data Domains", caption: "Create & switch context", icon: "◎" },
   { id: "overview", label: "Overview", caption: "Workspace health", icon: "◇" },
   { id: "sources", label: "Data Sources", caption: "Ingest & profile", icon: "▦" },
   { id: "semantic", label: "Semantic Studio", caption: "Model & govern", icon: "⌘" },
   { id: "ask", label: "Ask & Analyze", caption: "Query with evidence", icon: "✦" },
   { id: "runs", label: "Run History", caption: "Trace every decision", icon: "↺" },
+];
+
+const INITIAL_DOMAINS: DataDomain[] = [
+  {
+    id: SAMPLE_DOMAIN_ID,
+    name: "Anime Streaming",
+    slug: "anime-streaming",
+    description:
+      "Synthetic streaming analytics showcase spanning content, engagement, subscriptions, advertising, and merchandise.",
+    owner: "Content analytics",
+    status: "ready",
+    isSample: true,
+    sourceCount: 1,
+    runCount: 5,
+  },
 ];
 
 const ENTITIES: Entity[] = [
@@ -459,6 +531,7 @@ LIMIT 6;`,
 const INITIAL_RUNS: RunRecord[] = [
   {
     id: "qf_7a3e2c91",
+    domainId: SAMPLE_DOMAIN_ID,
     question: "Compare watch hours and completion rate by genre",
     status: "Passed",
     model: "qwen-plus",
@@ -468,6 +541,7 @@ const INITIAL_RUNS: RunRecord[] = [
   },
   {
     id: "qf_4ce8b1a2",
+    domainId: SAMPLE_DOMAIN_ID,
     question: "Top anime by merchandise GMV this quarter",
     status: "Passed",
     model: "qwen-plus",
@@ -477,6 +551,7 @@ const INITIAL_RUNS: RunRecord[] = [
   },
   {
     id: "qf_e832bb77",
+    domainId: SAMPLE_DOMAIN_ID,
     question: "Show every user email with subscription revenue",
     status: "Blocked",
     model: "qwen-plus",
@@ -486,6 +561,7 @@ const INITIAL_RUNS: RunRecord[] = [
   },
   {
     id: "qf_729af843",
+    domainId: SAMPLE_DOMAIN_ID,
     question: "Monthly active subscribers by plan tier",
     status: "Passed",
     model: "gpt-4.1-mini",
@@ -495,6 +571,7 @@ const INITIAL_RUNS: RunRecord[] = [
   },
   {
     id: "qf_c239a101",
+    domainId: SAMPLE_DOMAIN_ID,
     question: "Which studios have the highest average rating?",
     status: "Passed",
     model: "qwen-plus",
@@ -562,7 +639,7 @@ function normalizeQueryResult(payload: Record<string, unknown>): QueryResult {
 }
 
 export default function Home() {
-  const [activeView, setActiveView] = useState<View>("overview");
+  const [activeView, setActiveView] = useState<View>("domains");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [connection, setConnection] =
     useState<ConnectionState>("checking");
@@ -575,6 +652,10 @@ export default function Home() {
   const [semanticTab, setSemanticTab] = useState<SemanticTab>("graph");
   const [entityFilter, setEntityFilter] = useState("");
   const [toast, setToast] = useState("");
+  const [domains, setDomains] = useState<DataDomain[]>(INITIAL_DOMAINS);
+  const [activeDomainId, setActiveDomainId] = useState(SAMPLE_DOMAIN_ID);
+  const [domainMenuOpen, setDomainMenuOpen] = useState(false);
+  const [createDomainOpen, setCreateDomainOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadStep, setUploadStep] = useState(1);
@@ -582,11 +663,18 @@ export default function Home() {
   const [isProfiling, setIsProfiling] = useState(false);
   const [semanticReviewed, setSemanticReviewed] = useState(false);
   const [semanticValidated, setSemanticValidated] = useState(false);
+  const [semanticDraft, setSemanticDraft] = useState<SemanticDraft>(
+    INITIAL_SEMANTIC_DRAFT,
+  );
   const [uploadedSources, setUploadedSources] = useState<UploadedSource[]>([]);
   const [runFilter, setRunFilter] = useState<"All" | "Passed" | "Blocked">(
     "All",
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const activeDomain =
+    domains.find((domain) => domain.id === activeDomainId) ??
+    INITIAL_DOMAINS[0];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -608,6 +696,39 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/studio/domains")
+      .then((response) => {
+        if (!response.ok) throw new Error("Persistence unavailable");
+        return response.json() as Promise<{
+          domains?: Array<Record<string, unknown>>;
+        }>;
+      })
+      .then((payload) => {
+        const persisted = (payload.domains ?? []).map((domain) => ({
+          id: String(domain.id),
+          name: String(domain.name),
+          slug: String(domain.slug),
+          description: String(domain.description ?? ""),
+          owner: String(domain.owner ?? "Workspace admin"),
+          status:
+            String(domain.status) === "ready"
+              ? ("ready" as const)
+              : ("draft" as const),
+          isSample: Boolean(domain.is_sample),
+          sourceCount: Number(domain.source_count ?? 0),
+          runCount: Number(domain.run_count ?? 0),
+        }));
+        if (persisted.length) {
+          setDomains(persisted);
+          setActiveDomainId((current) =>
+            persisted.some((domain) => domain.id === current)
+              ? current
+              : persisted[0].id,
+          );
+        }
+      })
+      .catch(() => undefined);
+
     fetch("/api/studio/upload")
       .then((response) => {
         if (!response.ok) throw new Error("Persistence unavailable");
@@ -618,6 +739,7 @@ export default function Home() {
       .then((payload) => {
         const persisted = (payload.sources ?? []).map((source) => ({
           id: String(source.id),
+          domainId: String(source.domain_id ?? SAMPLE_DOMAIN_ID),
           name: String(source.name),
           type: String(source.source_type ?? "DATA"),
           size: formatBytes(Number(source.size_bytes ?? 0)),
@@ -639,6 +761,7 @@ export default function Home() {
       .then((payload) => {
         const persisted = (payload.runs ?? []).map((run) => ({
           id: String(run.id),
+          domainId: String(run.domain_id ?? SAMPLE_DOMAIN_ID),
           question: String(run.question),
           status:
             String(run.status) === "Blocked"
@@ -681,12 +804,29 @@ export default function Home() {
     ENTITIES.find((entity) => entity.name === selectedEntity) ?? ENTITIES[0];
 
   const filteredRuns = runs.filter(
-    (run) => runFilter === "All" || run.status === runFilter,
+    (run) =>
+      run.domainId === activeDomain.id &&
+      (runFilter === "All" || run.status === runFilter),
+  );
+  const activeDomainSources = uploadedSources.filter(
+    (source) => source.domainId === activeDomain.id,
+  );
+  const activeDomainRuns = runs.filter(
+    (run) => run.domainId === activeDomain.id,
   );
 
   async function runQuery(nextQuestion?: string) {
     const submitted = (nextQuestion ?? query).trim();
     if (!submitted || isRunning) return;
+    if (!activeDomain.isSample) {
+      setActiveView("ask");
+      setToast(
+        activeDomainSources.length
+          ? "Publish an executable connector for this domain before running analysis."
+          : "Upload data and publish its semantic contract before running analysis.",
+      );
+      return;
+    }
 
     setQuery(submitted);
     setActiveView("ask");
@@ -734,6 +874,7 @@ export default function Home() {
     setRuns((current) => [
       {
         id: nextResult.runId,
+        domainId: activeDomain.id,
         question: submitted,
         status: "Passed",
         model: connection === "live" ? "configured model" : "demo-model",
@@ -748,6 +889,7 @@ export default function Home() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         id: nextResult.runId,
+        domainId: activeDomain.id,
         question: submitted,
         status: "Passed",
         model: connection === "live" ? "configured model" : "demo-model",
@@ -798,6 +940,11 @@ export default function Home() {
     setUploadFiles(files);
     setSemanticReviewed(false);
     setSemanticValidated(false);
+    setSemanticDraft({
+      ...INITIAL_SEMANTIC_DRAFT,
+      description: `One governed business record represented by data uploaded to ${activeDomain.name}.`,
+      owner: activeDomain.owner,
+    });
   }
 
   async function profileFiles() {
@@ -810,6 +957,24 @@ export default function Home() {
 
   async function validateUploadSemantic() {
     if (!semanticReviewed) return;
+    const requiredFields = [
+      semanticDraft.entity,
+      semanticDraft.description,
+      semanticDraft.owner,
+      semanticDraft.grain,
+      semanticDraft.primaryKey,
+    ];
+    const metricsValid =
+      semanticDraft.metrics.length > 0 &&
+      semanticDraft.metrics.every(
+        (metric) =>
+          metric.name && metric.description && metric.expression,
+      );
+    if (requiredFields.some((value) => !value.trim()) || !metricsValid) {
+      setSemanticValidated(false);
+      setToast("Complete the entity, grain, owner, and metric contract first.");
+      return;
+    }
     await sleep(500);
     setSemanticValidated(true);
     setToast("Semantic contract passed all blocking checks.");
@@ -820,7 +985,16 @@ export default function Home() {
     const totalBytes = uploadFiles.reduce((sum, file) => sum + file.size, 0);
     const payload = new FormData();
     uploadFiles.forEach((file) => payload.append("files", file));
+    payload.append("domain_id", activeDomain.id);
     payload.append("reviewed", "true");
+    payload.append(
+      "semantic_contract",
+      JSON.stringify({
+        ...semanticDraft,
+        reviewed: true,
+        version: 1,
+      }),
+    );
 
     let persisted = false;
     try {
@@ -836,6 +1010,7 @@ export default function Home() {
     setUploadedSources((current) => [
       {
         id: crypto.randomUUID(),
+        domainId: activeDomain.id,
         name:
           uploadFiles.length === 1
             ? uploadFiles[0].name
@@ -851,6 +1026,17 @@ export default function Home() {
       },
       ...current,
     ]);
+    setDomains((current) =>
+      current.map((domain) =>
+        domain.id === activeDomain.id
+          ? {
+              ...domain,
+              sourceCount: domain.sourceCount + 1,
+              status: "ready",
+            }
+          : domain,
+      ),
+    );
     setUploadOpen(false);
     setUploadStep(1);
     setUploadFiles([]);
@@ -864,8 +1050,60 @@ export default function Home() {
   }
 
   function selectRun(run: RunRecord) {
+    setActiveDomainId(run.domainId);
     setQuery(run.question);
     setActiveView("ask");
+  }
+
+  function selectDomain(domain: DataDomain, view: View = "overview") {
+    setActiveDomainId(domain.id);
+    setDomainMenuOpen(false);
+    setActiveView(view);
+    setQuery(
+      domain.isSample
+        ? EXAMPLE_QUESTIONS[0]
+        : "Ask a governed question about this data domain",
+    );
+    setToast(`${domain.name} is now the active data domain.`);
+  }
+
+  async function createDomain(input: {
+    name: string;
+    description: string;
+    owner: string;
+  }) {
+    let created: DataDomain = {
+      id: `domain_${crypto.randomUUID().replaceAll("-", "")}`,
+      name: input.name,
+      slug: input.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, ""),
+      description: input.description,
+      owner: input.owner || "Workspace admin",
+      status: "draft",
+      isSample: false,
+      sourceCount: 0,
+      runCount: 0,
+    };
+    try {
+      const response = await fetch("/api/studio/domains", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (response.ok) {
+        const payload = (await response.json()) as { domain: DataDomain };
+        created = payload.domain;
+      }
+    } catch {
+      // Keep the complete workflow available in local demo mode.
+    }
+    setDomains((current) => [...current, created]);
+    setActiveDomainId(created.id);
+    setCreateDomainOpen(false);
+    setActiveView("sources");
+    setToast(`${created.name} created. Add its first governed data source.`);
   }
 
   return (
@@ -913,18 +1151,33 @@ export default function Home() {
         <div className="sidebar-spacer" />
         <div className="workspace-card">
           <div className="workspace-card-top">
-            <span className="workspace-avatar">AS</span>
+            <span className="workspace-avatar">
+              {activeDomain.name
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((word) => word[0])
+                .join("")
+                .toUpperCase()}
+            </span>
             <div>
-              <strong>Anime Streaming</strong>
-              <span>Synthetic showcase</span>
+              <strong>{activeDomain.name}</strong>
+              <span>{activeDomain.isSample ? "Sample data domain" : "Workspace data domain"}</span>
             </div>
           </div>
           <div className="workspace-progress-row">
             <span>Semantic coverage</span>
-            <strong>100%</strong>
+            <strong>{activeDomain.isSample ? "100%" : activeDomain.sourceCount ? "Draft" : "0%"}</strong>
           </div>
           <div className="workspace-progress">
-            <span />
+            <span
+              style={{
+                width: activeDomain.isSample
+                  ? "100%"
+                  : activeDomain.sourceCount
+                    ? "42%"
+                    : "0%",
+              }}
+            />
           </div>
         </div>
 
@@ -977,14 +1230,66 @@ export default function Home() {
                   ? "Live backend"
                   : "Interactive demo"}
             </button>
-            <div className="dataset-switcher">
+            <button
+              className="dataset-switcher"
+              onClick={() => setDomainMenuOpen((open) => !open)}
+              aria-expanded={domainMenuOpen}
+              aria-haspopup="menu"
+            >
               <span className="dataset-icon">A</span>
               <span>
-                <small>Active source</small>
-                <strong>Anime Streaming</strong>
+                <small>Active data domain</small>
+                <strong>{activeDomain.name}</strong>
               </span>
               <span className="chevron">⌄</span>
-            </div>
+            </button>
+            {domainMenuOpen && (
+              <div className="domain-switcher-menu" role="menu">
+                <div className="domain-switcher-heading">
+                  <span>Switch data domain</span>
+                  <button
+                    onClick={() => {
+                      setDomainMenuOpen(false);
+                      setCreateDomainOpen(true);
+                    }}
+                  >
+                    ＋ New
+                  </button>
+                </div>
+                {domains.map((domain) => (
+                  <button
+                    key={domain.id}
+                    className={cn(
+                      "domain-switcher-option",
+                      domain.id === activeDomain.id && "active",
+                    )}
+                    onClick={() => selectDomain(domain)}
+                    role="menuitem"
+                  >
+                    <span className="domain-option-icon">
+                      {domain.isSample ? "A" : "D"}
+                    </span>
+                    <span>
+                      <strong>{domain.name}</strong>
+                      <small>
+                        {domain.sourceCount} source
+                        {domain.sourceCount === 1 ? "" : "s"} · {domain.status}
+                      </small>
+                    </span>
+                    {domain.id === activeDomain.id && <em>✓</em>}
+                  </button>
+                ))}
+                <button
+                  className="domain-switcher-all"
+                  onClick={() => {
+                    setDomainMenuOpen(false);
+                    setActiveView("domains");
+                  }}
+                >
+                  Manage all data domains →
+                </button>
+              </div>
+            )}
             <button
               className="icon-button"
               aria-label="Open settings"
@@ -996,8 +1301,24 @@ export default function Home() {
         </header>
 
         <div className="content-scroll">
+          {activeView === "domains" && (
+            <DomainsView
+              domains={domains}
+              activeDomainId={activeDomain.id}
+              sourceCounts={uploadedSources.reduce<Record<string, number>>(
+                (counts, source) => {
+                  counts[source.domainId] = (counts[source.domainId] ?? 0) + 1;
+                  return counts;
+                },
+                {},
+              )}
+              selectDomain={selectDomain}
+              createDomain={() => setCreateDomainOpen(true)}
+            />
+          )}
           {activeView === "overview" && (
             <OverviewView
+              domain={activeDomain}
               query={query}
               setQuery={setQuery}
               runQuery={runQuery}
@@ -1005,18 +1326,22 @@ export default function Home() {
               openSemantic={() => setActiveView("semantic")}
               openRuns={() => setActiveView("runs")}
               connection={connection}
-              runs={runs}
+              runs={activeDomainRuns}
             />
           )}
           {activeView === "sources" && (
             <SourcesView
-              uploadedSources={uploadedSources}
+              domain={activeDomain}
+              uploadedSources={activeDomainSources}
               openUpload={() => setUploadOpen(true)}
               openSemantic={() => setActiveView("semantic")}
             />
           )}
           {activeView === "semantic" && (
             <SemanticView
+              domain={activeDomain}
+              hasSources={activeDomain.isSample || activeDomainSources.length > 0}
+              openUpload={() => setUploadOpen(true)}
               tab={semanticTab}
               setTab={setSemanticTab}
               entityFilter={entityFilter}
@@ -1030,6 +1355,8 @@ export default function Home() {
           )}
           {activeView === "ask" && (
             <AskView
+              domain={activeDomain}
+              hasSources={activeDomain.isSample || activeDomainSources.length > 0}
               query={query}
               setQuery={setQuery}
               submitQuery={submitQuery}
@@ -1039,7 +1366,7 @@ export default function Home() {
               result={result}
               copySql={copySql}
               downloadResult={downloadResult}
-              runs={runs.slice(0, 4)}
+              runs={activeDomainRuns.slice(0, 4)}
               selectRun={selectRun}
               connection={connection}
             />
@@ -1058,11 +1385,15 @@ export default function Home() {
 
       {uploadOpen && (
         <UploadModal
+          domain={activeDomain}
           step={uploadStep}
           files={uploadFiles}
           isProfiling={isProfiling}
           reviewed={semanticReviewed}
           validated={semanticValidated}
+          semanticDraft={semanticDraft}
+          setSemanticDraft={setSemanticDraft}
+          resetValidation={() => setSemanticValidated(false)}
           fileInputRef={fileInputRef}
           close={() => {
             setUploadOpen(false);
@@ -1074,6 +1405,13 @@ export default function Home() {
           setReviewed={setSemanticReviewed}
           validateSemantic={validateUploadSemantic}
           publishUpload={publishUpload}
+        />
+      )}
+
+      {createDomainOpen && (
+        <CreateDomainModal
+          close={() => setCreateDomainOpen(false)}
+          createDomain={createDomain}
         />
       )}
 
@@ -1094,7 +1432,141 @@ export default function Home() {
   );
 }
 
+function DomainsView({
+  domains,
+  activeDomainId,
+  sourceCounts,
+  selectDomain,
+  createDomain,
+}: {
+  domains: DataDomain[];
+  activeDomainId: string;
+  sourceCounts: Record<string, number>;
+  selectDomain: (domain: DataDomain, view?: View) => void;
+  createDomain: () => void;
+}) {
+  return (
+    <div className="page domains-page">
+      <PageHeader
+        eyebrow="GOVERNED CONTEXT"
+        title="Data Domains"
+        description="Create isolated business contexts, then add each domain’s sources, semantic definitions, policies, and analytical history."
+        action={
+          <button className="primary-button" onClick={createDomain}>
+            <span>＋</span> New data domain
+          </button>
+        }
+      />
+
+      <section className="domain-hero panel">
+        <div>
+          <span className="panel-kicker">DOMAIN-FIRST WORKFLOW</span>
+          <h2>One platform. Many governed business contexts.</h2>
+          <p>
+            Every upload, entity, metric, Join Path, contract, and run belongs
+            to the selected data domain. Context never leaks across domains.
+          </p>
+        </div>
+        <div className="domain-flow" aria-label="Data domain workflow">
+          {[
+            ["01", "Create domain"],
+            ["02", "Add sources"],
+            ["03", "Review semantics"],
+            ["04", "Ask with evidence"],
+          ].map(([index, label], itemIndex) => (
+            <span key={label}>
+              <i>{index}</i>
+              <strong>{label}</strong>
+              {itemIndex < 3 && <b>→</b>}
+            </span>
+          ))}
+        </div>
+      </section>
+
+      <div className="domain-grid">
+        {domains.map((domain) => {
+          const sourceCount = Math.max(
+            domain.isSample ? 1 : 0,
+            domain.sourceCount,
+            sourceCounts[domain.id] ?? 0,
+          );
+          return (
+            <article
+              className={cn(
+                "domain-card",
+                domain.id === activeDomainId && "active",
+              )}
+              key={domain.id}
+            >
+              <div className="domain-card-top">
+                <span className={cn("domain-card-icon", domain.isSample && "sample")}>
+                  {domain.isSample ? "A" : "D"}
+                </span>
+                <div>
+                  <div className="domain-card-labels">
+                    {domain.id === activeDomainId && (
+                      <span className="status-pill success">ACTIVE</span>
+                    )}
+                    {domain.isSample && (
+                      <span className="status-pill neutral">SAMPLE</span>
+                    )}
+                  </div>
+                  <h2>{domain.name}</h2>
+                  <code>{domain.slug}</code>
+                </div>
+              </div>
+              <p>{domain.description}</p>
+              <div className="domain-card-stats">
+                <span>
+                  <strong>{sourceCount}</strong>
+                  <small>Sources</small>
+                </span>
+                <span>
+                  <strong>{domain.isSample ? 15 : sourceCount ? 1 : 0}</strong>
+                  <small>Entities</small>
+                </span>
+                <span>
+                  <strong>{domain.isSample ? 11 : 0}</strong>
+                  <small>Metrics</small>
+                </span>
+                <span>
+                  <strong>{domain.isSample ? "82/82" : sourceCount ? "Draft" : "—"}</strong>
+                  <small>Contract</small>
+                </span>
+              </div>
+              <footer>
+                <span>
+                  Owner <strong>{domain.owner}</strong>
+                </span>
+                <button
+                  className={
+                    domain.id === activeDomainId
+                      ? "secondary-button"
+                      : "primary-button"
+                  }
+                  onClick={() => selectDomain(domain)}
+                >
+                  {domain.id === activeDomainId
+                    ? "Open active domain →"
+                    : "Select domain →"}
+                </button>
+              </footer>
+            </article>
+          );
+        })}
+
+        <button className="domain-create-card" onClick={createDomain}>
+          <span>＋</span>
+          <strong>Create another data domain</strong>
+          <p>Start with a clean semantic and governance boundary.</p>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function OverviewView({
+  domain,
   query,
   setQuery,
   runQuery,
@@ -1104,6 +1576,7 @@ function OverviewView({
   connection,
   runs,
 }: {
+  domain: DataDomain;
   query: string;
   setQuery: (value: string) => void;
   runQuery: (value?: string) => Promise<void>;
@@ -1113,6 +1586,108 @@ function OverviewView({
   connection: ConnectionState;
   runs: RunRecord[];
 }) {
+  if (!domain.isSample) {
+    return (
+      <div className="page page-overview">
+        <section className="hero-panel domain-onboarding-hero">
+          <div className="hero-copy">
+            <div className="eyebrow">
+              <span className="pulse-dot" />
+              ACTIVE DATA DOMAIN
+            </div>
+            <h1>
+              {domain.name}
+              <span>Build its trusted analytical language.</span>
+            </h1>
+            <p>
+              This domain is isolated from every other business context.
+              Complete the source and semantic contract steps to activate
+              governed analysis.
+            </p>
+            <div className="onboarding-actions">
+              <button className="primary-button" onClick={openSources}>
+                Add domain data →
+              </button>
+              <button className="secondary-button" onClick={openSemantic}>
+                Open semantic studio
+              </button>
+            </div>
+          </div>
+          <div className="domain-readiness">
+            <span className="panel-kicker">ACTIVATION PATH</span>
+            {[
+              ["Data domain created", true],
+              ["Source profiled", domain.sourceCount > 0],
+              ["Semantic contract reviewed", false],
+              ["Execution connector ready", false],
+            ].map(([label, complete], index) => (
+              <div key={String(label)} className={cn(complete && "complete")}>
+                <span>{complete ? "✓" : index + 1}</span>
+                <strong>{label}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="metric-grid" aria-label="Domain metrics">
+          <MetricCard
+            label="Connected sources"
+            value={String(domain.sourceCount)}
+            detail="Scoped to this domain"
+            trend={domain.sourceCount ? "Profiled" : "Action required"}
+            icon="▦"
+            onClick={openSources}
+          />
+          <MetricCard
+            label="Semantic entities"
+            value={domain.sourceCount ? "1 draft" : "0"}
+            detail="Human review required"
+            trend="Domain isolated"
+            icon="⌘"
+            onClick={openSemantic}
+          />
+          <MetricCard
+            label="Business metrics"
+            value="0"
+            detail="Define after profiling"
+            trend="No borrowed meaning"
+            icon="ƒ"
+            onClick={openSemantic}
+          />
+          <MetricCard
+            label="Contract status"
+            value="Draft"
+            detail="Blocking until published"
+            trend="Safe by default"
+            icon="◇"
+            onClick={openSemantic}
+          />
+        </section>
+        <section className="panel domain-empty-panel">
+          <span className="domain-card-icon">D</span>
+          <div>
+            <span className="panel-kicker">NEXT BEST ACTION</span>
+            <h2>
+              {domain.sourceCount
+                ? "Finish the semantic contract"
+                : "Upload the first domain-owned source"}
+            </h2>
+            <p>
+              QueryForge will profile physical structure, propose a semantic
+              draft, require an owner review, and publish data plus meaning
+              atomically.
+            </p>
+          </div>
+          <button
+            className="primary-button"
+            onClick={domain.sourceCount ? openSemantic : openSources}
+          >
+            Continue setup →
+          </button>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="page page-overview">
       <section className="hero-panel">
@@ -1122,12 +1697,13 @@ function OverviewView({
             SEMANTIC LAYER ONLINE
           </div>
           <h1>
-            Ask the anime universe.
+            Turn this domain into trusted answers.
             <span>Inspect every decision.</span>
           </h1>
           <p>
-            Natural-language analytics grounded in governed metrics, explicit
-            join paths, and read-only SQL policy.
+            <strong>{domain.name}</strong> is the selected sample domain.
+            Natural-language analytics stays grounded in its governed metrics,
+            explicit Join Paths, and read-only SQL policy.
           </p>
           <form
             className="hero-query"
@@ -1405,10 +1981,12 @@ function MetricCard({
 }
 
 function SourcesView({
+  domain,
   uploadedSources,
   openUpload,
   openSemantic,
 }: {
+  domain: DataDomain;
   uploadedSources: UploadedSource[];
   openUpload: () => void;
   openSemantic: () => void;
@@ -1417,8 +1995,8 @@ function SourcesView({
     <div className="page">
       <PageHeader
         eyebrow="DATA FOUNDATION"
-        title="Data Sources"
-        description="Connect data, inspect its physical shape, and publish it only with a reviewed semantic contract."
+        title={`${domain.name} · Data Sources`}
+        description="Sources are isolated inside the active data domain and can publish only with a reviewed semantic contract."
         action={
           <button className="primary-button" onClick={openUpload}>
             <span>＋</span> Add data source
@@ -1426,8 +2004,9 @@ function SourcesView({
         }
       />
 
-      <div className="source-summary-grid">
-        <div className="source-feature-card">
+      <div className={cn("source-summary-grid", !domain.isSample && "single")}>
+        {domain.isSample && (
+          <div className="source-feature-card">
           <div className="source-card-header">
             <span className="source-logo sqlite">SQL</span>
             <div>
@@ -1465,15 +2044,36 @@ function SourcesView({
             </span>
             <button onClick={openSemantic}>Inspect →</button>
           </div>
-        </div>
+          </div>
+        )}
 
         <button className="add-source-card" onClick={openUpload}>
           <span className="add-source-icon">＋</span>
-          <strong>Connect another source</strong>
+          <strong>
+            {domain.isSample ? "Connect another source" : "Add the first domain source"}
+          </strong>
           <p>SQLite, CSV, or Parquet</p>
           <span className="tiny-label">SEMANTICS REQUIRED</span>
         </button>
       </div>
+
+      {!domain.isSample && uploadedSources.length === 0 && (
+        <section className="panel domain-source-empty">
+          <span className="domain-card-icon">D</span>
+          <div>
+            <span className="panel-kicker">EMPTY DOMAIN</span>
+            <h2>No data has entered {domain.name}</h2>
+            <p>
+              Upload files here to profile them inside this domain. QueryForge
+              will not borrow entities or metrics from the Anime Streaming
+              sample.
+            </p>
+          </div>
+          <button className="primary-button" onClick={openUpload}>
+            Upload domain data →
+          </button>
+        </section>
+      )}
 
       {uploadedSources.length > 0 && (
         <section className="panel uploaded-panel">
@@ -1500,7 +2100,8 @@ function SourcesView({
         </section>
       )}
 
-      <div className="sources-layout">
+      <div className={cn("sources-layout", !domain.isSample && "domain-only")}>
+        {domain.isSample && (
         <section className="panel table-inventory">
           <div className="panel-heading">
             <div>
@@ -1547,6 +2148,7 @@ function SourcesView({
             <button className="table-more">Show all 15 tables</button>
           </div>
         </section>
+        )}
 
         <aside className="panel pipeline-panel">
           <div className="panel-heading">
@@ -1587,6 +2189,9 @@ function SourcesView({
 }
 
 function SemanticView({
+  domain,
+  hasSources,
+  openUpload,
   tab,
   setTab,
   entityFilter,
@@ -1597,6 +2202,9 @@ function SemanticView({
   activeEntity,
   toast,
 }: {
+  domain: DataDomain;
+  hasSources: boolean;
+  openUpload: () => void;
   tab: SemanticTab;
   setTab: (tab: SemanticTab) => void;
   entityFilter: string;
@@ -1607,11 +2215,190 @@ function SemanticView({
   activeEntity: Entity;
   toast: (message: string) => void;
 }) {
+  if (!domain.isSample) {
+    return (
+      <div className="page semantic-page">
+        <PageHeader
+          eyebrow="DOMAIN SEMANTICS"
+          title={`${domain.name} · Semantic Studio`}
+          description="Build a domain-owned business contract. QueryForge never imports entities, metrics, or Join Paths from another domain."
+          action={
+            <div className="header-action-group">
+              <button className="secondary-button" onClick={openUpload}>
+                ＋ Add source
+              </button>
+              <button
+                className="primary-button"
+                disabled={!hasSources}
+                onClick={() =>
+                  toast(
+                    hasSources
+                      ? "Semantic draft saved for validation."
+                      : "Add a source before defining its semantic contract.",
+                  )
+                }
+              >
+                Validate draft
+              </button>
+            </div>
+          }
+        />
+
+        <div className="semantic-health-strip draft">
+          <div className="health-score-mini">
+            <strong>{hasSources ? "42" : "0"}</strong>
+            <span>/100</span>
+          </div>
+          <div>
+            <strong>
+              {hasSources
+                ? "Domain contract needs business review"
+                : "Semantic construction starts with domain data"}
+            </strong>
+            <p>
+              Identity, grain, metrics, relationships, ownership, policy, and
+              quality checks must all pass before analysis unlocks.
+            </p>
+          </div>
+          <div className="semantic-health-metrics">
+            <span>
+              <strong>{hasSources ? 1 : 0}</strong> draft entities
+            </span>
+            <span>
+              <strong>0</strong> relationships
+            </span>
+            <span>
+              <strong>0</strong> metrics
+            </span>
+            <span>
+              <strong>0</strong> Join Paths
+            </span>
+          </div>
+          <span className="status-pill neutral">DRAFT</span>
+        </div>
+
+        {!hasSources ? (
+          <section className="panel semantic-empty-state">
+            <span className="semantic-empty-icon">⌘</span>
+            <div>
+              <span className="panel-kicker">NO PHYSICAL MODEL YET</span>
+              <h2>Add data before declaring business meaning</h2>
+              <p>
+                QueryForge profiles tables and columns first, then proposes
+                candidate entities without pretending technical schema names
+                are business definitions.
+              </p>
+            </div>
+            <button className="primary-button" onClick={openUpload}>
+              Add governed source →
+            </button>
+          </section>
+        ) : (
+          <div className="semantic-builder">
+            <aside className="semantic-builder-steps">
+              <span className="panel-kicker">CONTRACT BUILDER</span>
+              {[
+                ["01", "Identity & grain", "active"],
+                ["02", "Dimensions & measures", ""],
+                ["03", "Metrics", ""],
+                ["04", "Relationships", ""],
+                ["05", "Policy & quality", ""],
+                ["06", "Review & publish", ""],
+              ].map(([index, label, state]) => (
+                <button className={state} key={label}>
+                  <span>{index}</span>
+                  <strong>{label}</strong>
+                </button>
+              ))}
+            </aside>
+            <section className="panel semantic-contract-editor">
+              <div className="panel-heading">
+                <div>
+                  <span className="panel-kicker">STEP 01</span>
+                  <h2>Define business identity and grain</h2>
+                </div>
+                <span className="status-pill neutral">REVIEW REQUIRED</span>
+              </div>
+              <p className="contract-editor-intro">
+                Start from the physical profile, then name the real business
+                entity and state exactly what one row represents.
+              </p>
+              <div className="semantic-contract-fields">
+                <label>
+                  <span>Business entity</span>
+                  <input defaultValue="uploaded_record" />
+                  <small>Use a stable singular business concept.</small>
+                </label>
+                <label>
+                  <span>Primary source</span>
+                  <input value="Latest profiled upload" readOnly />
+                  <small>Scoped to {domain.name}.</small>
+                </label>
+                <label className="wide">
+                  <span>Business description</span>
+                  <textarea
+                    rows={3}
+                    defaultValue="One reviewed business record represented by the uploaded source."
+                  />
+                </label>
+                <label>
+                  <span>Grain</span>
+                  <input defaultValue="record_id" />
+                  <small>Required for safe aggregation.</small>
+                </label>
+                <label>
+                  <span>Owner</span>
+                  <input defaultValue={domain.owner} />
+                  <small>Accountable for semantic approval.</small>
+                </label>
+              </div>
+              <div className="contract-guardrail">
+                <span>!</span>
+                <p>
+                  Analysis remains blocked until the primary key is unique,
+                  every metric declares an aggregation and denominator, and all
+                  multi-hop relationships have a reviewed Join Path.
+                </p>
+              </div>
+              <footer>
+                <span>Autosaved as a domain-local draft</span>
+                <button
+                  className="primary-button"
+                  onClick={() => toast("Identity and grain saved.")}
+                >
+                  Save & continue →
+                </button>
+              </footer>
+            </section>
+            <aside className="panel semantic-checklist">
+              <span className="panel-kicker">PUBLICATION GATE</span>
+              <h3>Required contract</h3>
+              {[
+                ["Entity has a clear grain", true],
+                ["Primary key is unique", false],
+                ["Metric units are explicit", false],
+                ["Cardinality is reviewed", false],
+                ["Sensitive fields are classified", false],
+                ["Quality checks pass", false],
+              ].map(([label, passed]) => (
+                <div key={String(label)} className={cn(passed && "passed")}>
+                  <span>{passed ? "✓" : "○"}</span>
+                  <strong>{label}</strong>
+                </div>
+              ))}
+              <p>Data and semantics publish atomically only after 100%.</p>
+            </aside>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="page semantic-page">
       <PageHeader
         eyebrow="BUSINESS MEANING"
-        title="Semantic Studio"
+        title={`${domain.name} · Semantic Studio`}
         description="Model entities, metrics, relationships, and safe Join Paths before any analytical query can run."
         action={
           <div className="header-action-group">
@@ -1951,6 +2738,8 @@ function SemanticView({
 }
 
 function AskView({
+  domain,
+  hasSources,
   query,
   setQuery,
   submitQuery,
@@ -1964,6 +2753,8 @@ function AskView({
   selectRun,
   connection,
 }: {
+  domain: DataDomain;
+  hasSources: boolean;
   query: string;
   setQuery: (value: string) => void;
   submitQuery: (event: FormEvent) => void;
@@ -1977,6 +2768,57 @@ function AskView({
   selectRun: (run: RunRecord) => void;
   connection: ConnectionState;
 }) {
+  if (!domain.isSample) {
+    return (
+      <div className="page domain-analysis-page">
+        <PageHeader
+          eyebrow="DOMAIN ANALYSIS"
+          title={`${domain.name} · Ask & Analyze`}
+          description="Questions execute only against the active domain after its semantic contract and runtime connector are published."
+          action={
+            <span className="status-pill neutral">
+              {hasSources ? "SEMANTICS REQUIRED" : "DATA REQUIRED"}
+            </span>
+          }
+        />
+        <section className="panel domain-analysis-lock">
+          <div className="analysis-lock-visual">
+            <span>✦</span>
+            <i />
+            <b>⌘</b>
+            <i />
+            <em>SQL</em>
+          </div>
+          <div>
+            <span className="panel-kicker">SAFE BY DEFAULT</span>
+            <h2>
+              {hasSources
+                ? "Publish the semantic contract to unlock questions"
+                : "This domain needs data before it can answer"}
+            </h2>
+            <p>
+              QueryForge will not fall back to the Anime Streaming sample or
+              invent joins when this domain is incomplete. Domain context,
+              meaning, policy, and evidence must travel together.
+            </p>
+            <div className="analysis-lock-checks">
+              {[
+                ["Domain selected", true],
+                ["Source available", hasSources],
+                ["Semantic contract published", false],
+                ["Execution connector ready", false],
+              ].map(([label, ready]) => (
+                <span key={String(label)} className={cn(ready && "ready")}>
+                  {ready ? "✓" : "○"} {label}
+                </span>
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   const maxValue = Math.max(
     ...result.rows.map((row) => Number(row[1]) || 0),
     1,
@@ -2040,7 +2882,7 @@ function AskView({
             rows={2}
           />
           <div className="composer-options">
-            <span className="option-chip">Anime Streaming</span>
+            <span className="option-chip">{domain.name}</span>
             <span className="option-chip">Auto complexity</span>
             <span className="option-chip">Report on</span>
           </div>
@@ -2398,11 +3240,15 @@ function RunsView({
 }
 
 function UploadModal({
+  domain,
   step,
   files,
   isProfiling,
   reviewed,
   validated,
+  semanticDraft,
+  setSemanticDraft,
+  resetValidation,
   fileInputRef,
   close,
   handleFiles,
@@ -2412,11 +3258,17 @@ function UploadModal({
   validateSemantic,
   publishUpload,
 }: {
+  domain: DataDomain;
   step: number;
   files: File[];
   isProfiling: boolean;
   reviewed: boolean;
   validated: boolean;
+  semanticDraft: SemanticDraft;
+  setSemanticDraft: (
+    value: SemanticDraft | ((current: SemanticDraft) => SemanticDraft),
+  ) => void;
+  resetValidation: () => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   close: () => void;
   handleFiles: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -2440,7 +3292,10 @@ function UploadModal({
           <div>
             <span className="panel-kicker">GOVERNED INGESTION</span>
             <h2 id="upload-title">Add a data source</h2>
-            <p>Data cannot publish without reviewed business meaning.</p>
+            <p>
+              Destination: <strong>{domain.name}</strong> · Data cannot publish
+              without reviewed business meaning.
+            </p>
           </div>
           <button className="modal-close" onClick={close} aria-label="Close">
             ×
@@ -2540,7 +3395,7 @@ function UploadModal({
               </div>
               <div>
                 <span>Candidate grain</span>
-                <strong>event_id</strong>
+                <strong>record_id</strong>
               </div>
               <div>
                 <span>Dimensions</span>
@@ -2559,10 +3414,10 @@ function UploadModal({
                 <span>Quality</span>
               </div>
               {[
-                ["event_id", "INTEGER", "Primary key", "Unique"],
-                ["user_id", "INTEGER", "Entity key", "99.9%"],
-                ["occurred_at", "TIMESTAMP", "Time dimension", "100%"],
-                ["watch_seconds", "INTEGER", "Measure", "2 outliers"],
+                ["record_id", "INTEGER", "Primary key", "Unique"],
+                ["entity_id", "INTEGER", "Entity key", "99.9%"],
+                ["recorded_at", "TIMESTAMP", "Time dimension", "100%"],
+                ["amount", "DECIMAL", "Candidate measure", "2 outliers"],
               ].map((row) => (
                 <div key={row[0]}>
                   {row.map((cell, index) => (
@@ -2598,33 +3453,92 @@ function UploadModal({
               <div className="semantic-draft-form">
                 <label>
                   <span>Entity name</span>
-                  <input defaultValue="uploaded_watch_event" />
+                  <input
+                    value={semanticDraft.entity}
+                    onChange={(event) => {
+                      setSemanticDraft((current) => ({
+                        ...current,
+                        entity: event.target.value,
+                      }));
+                      setReviewed(false);
+                      resetValidation();
+                    }}
+                  />
                 </label>
                 <label>
                   <span>Business description</span>
                   <textarea
                     rows={3}
-                    defaultValue="One governed playback event uploaded by the workspace owner."
+                    value={semanticDraft.description}
+                    onChange={(event) => {
+                      setSemanticDraft((current) => ({
+                        ...current,
+                        description: event.target.value,
+                      }));
+                      setReviewed(false);
+                      resetValidation();
+                    }}
                   />
                 </label>
                 <div className="form-pair">
                   <label>
                     <span>Owner</span>
-                    <input defaultValue="engagement-analytics" />
+                    <input
+                      value={semanticDraft.owner}
+                      onChange={(event) => {
+                        setSemanticDraft((current) => ({
+                          ...current,
+                          owner: event.target.value,
+                        }));
+                        setReviewed(false);
+                        resetValidation();
+                      }}
+                    />
                   </label>
                   <label>
                     <span>Grain</span>
-                    <input defaultValue="event_id" />
+                    <input
+                      value={semanticDraft.grain}
+                      onChange={(event) => {
+                        setSemanticDraft((current) => ({
+                          ...current,
+                          grain: event.target.value,
+                        }));
+                        setReviewed(false);
+                        resetValidation();
+                      }}
+                    />
                   </label>
                 </div>
                 <div className="form-pair">
                   <label>
                     <span>Primary key</span>
-                    <input defaultValue="event_id" />
+                    <input
+                      value={semanticDraft.primaryKey}
+                      onChange={(event) => {
+                        setSemanticDraft((current) => ({
+                          ...current,
+                          primaryKey: event.target.value,
+                        }));
+                        setReviewed(false);
+                        resetValidation();
+                      }}
+                    />
                   </label>
                   <label>
                     <span>Sensitivity</span>
-                    <select defaultValue="internal">
+                    <select
+                      value={semanticDraft.sensitivity}
+                      onChange={(event) => {
+                        setSemanticDraft((current) => ({
+                          ...current,
+                          sensitivity: event.target
+                            .value as SemanticDraft["sensitivity"],
+                        }));
+                        setReviewed(false);
+                        resetValidation();
+                      }}
+                    >
                       <option>public</option>
                       <option>internal</option>
                       <option>restricted</option>
@@ -2640,18 +3554,19 @@ function UploadModal({
                 </div>
                 <div>
                   <span>Dimensions</span>
-                  <strong>7</strong>
+                  <strong>{semanticDraft.dimensions.length}</strong>
                 </div>
                 <div>
                   <span>Draft metrics</span>
-                  <strong>2</strong>
+                  <strong>{semanticDraft.metrics.length}</strong>
                 </div>
                 <div>
                   <span>Quality rules</span>
                   <strong>6</strong>
                 </div>
-                <code>uploaded_watch_hours</code>
-                <code>uploaded_completion_rate</code>
+                {semanticDraft.metrics.map((metric) => (
+                  <code key={metric.name}>{metric.name}</code>
+                ))}
               </div>
             </div>
             <label className="review-checkbox">
@@ -2661,7 +3576,7 @@ function UploadModal({
                 onChange={(event) => {
                   setReviewed(event.target.checked);
                   if (!event.target.checked) {
-                    // Re-review invalidates the previous validation.
+                    resetValidation();
                   }
                 }}
               />
@@ -2708,6 +3623,138 @@ function UploadModal({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function CreateDomainModal({
+  close,
+  createDomain,
+}: {
+  close: () => void;
+  createDomain: (input: {
+    name: string;
+    description: string;
+    owner: string;
+  }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [owner, setOwner] = useState("Workspace admin");
+  const [isCreating, setIsCreating] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (name.trim().length < 2 || isCreating) return;
+    setIsCreating(true);
+    await createDomain({
+      name: name.trim(),
+      description:
+        description.trim() ||
+        "A governed business context for data, semantics, policy, and trusted analysis.",
+      owner: owner.trim() || "Workspace admin",
+    });
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form
+        className="modal create-domain-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-domain-title"
+        onSubmit={(event) => void submit(event)}
+      >
+        <div className="modal-header">
+          <div>
+            <span className="panel-kicker">NEW GOVERNANCE BOUNDARY</span>
+            <h2 id="create-domain-title">Create a data domain</h2>
+            <p>
+              Sources, semantics, policies, and run history stay isolated inside
+              this context.
+            </p>
+          </div>
+          <button
+            className="modal-close"
+            onClick={close}
+            type="button"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="create-domain-body">
+          <div className="domain-name-preview">
+            <span>
+              {name
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((word) => word[0])
+                .join("")
+                .toUpperCase() || "DD"}
+            </span>
+            <div>
+              <strong>{name || "Untitled data domain"}</strong>
+              <code>
+                {name
+                  .toLowerCase()
+                  .replace(/[^a-z0-9]+/g, "-")
+                  .replace(/^-+|-+$/g, "") || "domain-slug"}
+              </code>
+            </div>
+          </div>
+          <label>
+            <span>Domain name</span>
+            <input
+              autoFocus
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Retail Commerce"
+              maxLength={80}
+              required
+            />
+            <small>Use a stable business context, not a database name.</small>
+          </label>
+          <label>
+            <span>Purpose</span>
+            <textarea
+              rows={3}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="What decisions and analytical questions belong here?"
+            />
+          </label>
+          <label>
+            <span>Domain owner</span>
+            <input
+              value={owner}
+              onChange={(event) => setOwner(event.target.value)}
+              placeholder="Team or accountable owner"
+            />
+          </label>
+          <div className="domain-boundary-note">
+            <span>◆</span>
+            <p>
+              Creating the domain does not copy sample semantics. The next step
+              is to upload this domain’s own data and review its semantic
+              contract.
+            </p>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="secondary-button" type="button" onClick={close}>
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={name.trim().length < 2 || isCreating}
+          >
+            {isCreating ? "Creating…" : "Create & add data →"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
