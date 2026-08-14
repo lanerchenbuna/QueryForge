@@ -1,7 +1,10 @@
 """Evaluate QueryForge against multi-domain NL2SQL gold cases.
 
 The evaluator reports exact SQL agreement separately from semantic result equivalence.
-Token and cost values are deterministic estimates, not provider-reported billing usage.
+Policy precision/recall is measured over *generated* SQL: rejection probes must be
+rejected by the real policy engine (with the case's sql_policy), and any legitimate
+query case whose generated SQL is rejected counts as a false positive. Token and
+cost values are deterministic estimates, not provider-reported billing usage.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from queryforge.application import AgentOptions, AgentService
 from queryforge.data_assets import DataAssetBuilder
+from queryforge.domain.security import SQLPolicyViolation, load_sql_policy
 from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 
@@ -57,6 +61,26 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Estimated output-token USD price per million tokens",
+    )
+    parser.add_argument(
+        "--min-execution-success",
+        type=float,
+        default=1.0,
+        help="Exit-code gate: minimum sql_execution_success_rate (0..1)",
+    )
+    parser.add_argument(
+        "--min-semantic-correct",
+        type=float,
+        default=0.0,
+        help="Exit-code gate: minimum semantic_correctness_rate (0..1); "
+        "0 disables the gate",
+    )
+    parser.add_argument(
+        "--min-policy-recall",
+        type=float,
+        default=0.0,
+        help="Exit-code gate: minimum policy_rejection_recall over probes (0..1); "
+        "0 disables the gate",
     )
     return parser.parse_args()
 
@@ -148,7 +172,9 @@ def evaluate_cases(
             case, default_database, default_semantic_model
         )
         if case.get("expected_outcome") == "policy_rejection":
-            result = _evaluate_policy_probe(case, database)
+            result = _evaluate_policy_probe(
+                case, database, default_sql_policy=default_sql_policy
+            )
         else:
             result = _evaluate_query(
                 case,
@@ -207,6 +233,8 @@ def _evaluate_query(
                     run_id=f"evaluation_warmup_{index}_{turn}",
                 ),
             )
+        # Latency measures the evaluated turn only; warmup turns are excluded.
+        started = time.perf_counter()
         output = service.ask(
             case["question"],
             AgentOptions(
@@ -221,16 +249,26 @@ def _evaluate_query(
                 run_id=f"evaluation_{index}",
             ),
         )
-        expected_rows = _execute_expected(database, case.get("expected_sql"))
-        expected_policy_rejected = False
-        policy_rejected = _is_policy_rejected(str(case.get("expected_sql") or ""))
-        semantic_correct = _canonical_rows(output.get("rows", [])) == _canonical_rows(
-            expected_rows
+        expected_columns, expected_rows = _execute_expected(
+            database, case.get("expected_sql")
+        )
+        # Policy outcome of the *generated* SQL: rejecting a legitimate query is
+        # a false positive; trusting the expected SQL would make precision
+        # tautologically 1.0.
+        policy_rejected = _generated_policy_outcome(output)
+        semantic_correct = _semantic_equivalent(
+            output.get("rows", []),
+            output.get("columns"),
+            expected_rows,
+            expected_columns,
         )
         selection = output.get("candidate_selection") or {}
         candidates = selection.get("candidates", [])
         first_candidate_correct = _candidate_correct(
-            candidates[0].get("sql") if candidates else None, database, expected_rows
+            candidates[0].get("sql") if candidates else None,
+            database,
+            expected_rows,
+            expected_columns,
         )
         return {
             "id": case.get("id", index),
@@ -243,7 +281,7 @@ def _evaluate_query(
             "sql_exact_match": normalize_sql(output.get("sql"))
             == normalize_sql(case.get("expected_sql")),
             "policy_rejected": policy_rejected,
-            "policy_expected_rejection": expected_policy_rejected,
+            "policy_expected_rejection": False,
             "row_count": output.get("row_count"),
             "latency_ms": round((time.perf_counter() - started) * 1000, 3),
             "sql": output.get("sql"),
@@ -275,52 +313,180 @@ def _evaluate_query(
         }
 
 
-def _evaluate_policy_probe(case: dict[str, Any], database: Path) -> dict[str, Any]:
+def _evaluate_policy_probe(
+    case: dict[str, Any],
+    database: Path,
+    *,
+    default_sql_policy: str | None = None,
+) -> dict[str, Any]:
+    """Run one rejection probe through the real policy engine.
+
+    The probe is evaluated against the same ``DatabaseTool`` governance path
+    used at execution time, with the case's ``sql_policy`` (or the default),
+    so table/column scope, LIMIT budgets, and join rules are actually measured.
+    """
     started = time.perf_counter()
     probe = str(case.get("policy_probe_sql") or "")
-    rejected = _is_policy_rejected(probe)
+    if not probe:
+        return {
+            "id": case.get("id"),
+            "domain": case.get("domain", "default"),
+            "category": "policy_rejection",
+            "expected_outcome": "policy_rejection",
+            "status": "error",
+            "policy_rejected": None,
+            "policy_expected_rejection": True,
+            "policy_rule": None,
+            "policy_name": None,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+            "sql": probe,
+            "candidates": [],
+            "candidate_selection_used": False,
+            "error": "policy_probe_sql is missing",
+        }
+    rejected = False
+    rule: str | None = None
+    policy_name: str | None = None
+    error: str | None = None
+    try:
+        policy_path = (
+            _project_path(str(case.get("sql_policy")))
+            if case.get("sql_policy")
+            else (
+                _project_path(default_sql_policy)
+                if default_sql_policy
+                else None
+            )
+        )
+        policy, policy_source = load_sql_policy(policy_path)
+        policy_name = policy.name
+        with SQLiteConnector(str(database)) as connector:
+            tool = DatabaseTool(
+                connector, policy, policy_source_path=policy_source
+            )
+            try:
+                decision = tool.policy_engine.evaluate(probe)
+                rule = decision.rule
+            except SQLPolicyViolation as exc:
+                rejected = True
+                rule = exc.decision.rule
+    except Exception as exc:
+        error = str(exc)
     return {
         "id": case.get("id"),
         "domain": case.get("domain", "default"),
         "category": "policy_rejection",
         "expected_outcome": "policy_rejection",
-        "status": "rejected" if rejected else "accepted",
+        "status": (
+            "error" if error else "rejected" if rejected else "accepted"
+        ),
         "policy_rejected": rejected,
         "policy_expected_rejection": True,
+        "policy_rule": rule,
+        "policy_name": policy_name,
         "latency_ms": round((time.perf_counter() - started) * 1000, 3),
         "sql": probe,
         "candidates": [],
         "candidate_selection_used": False,
-        "error": None,
+        "error": error,
     }
 
 
-def _execute_expected(database: Path, sql: str | None) -> list[list[Any]]:
+def _execute_expected(
+    database: Path, sql: str | None
+) -> tuple[list[str], list[list[Any]]]:
     if not sql:
-        return []
+        return [], []
     with SQLiteConnector(str(database)) as connector:
-        return connector.execute_sql(DatabaseTool.validate_readonly_sql(sql)).rows
+        result = connector.execute_sql(DatabaseTool.validate_readonly_sql(sql))
+        return result.columns, result.rows
 
 
-def _is_policy_rejected(sql: str) -> bool:
-    try:
-        DatabaseTool.validate_readonly_sql(sql)
-        return False
-    except Exception:
+def _generated_policy_outcome(output: dict[str, Any]) -> bool | None:
+    """Extract the policy outcome of the SQL that was actually generated.
+
+    Returns True when the policy engine rejected the generated SQL (a false
+    positive for a legitimate query case), False when it was allowed, and
+    None when the outcome is unknown.
+    """
+    decisions = (output.get("sql_security") or {}).get("decisions") or []
+    for decision in reversed(decisions):
+        allowed = decision.get("allowed")
+        if isinstance(allowed, bool):
+            return not allowed
+    if output.get("status") == "blocked":
         return True
+    if output.get("status") == "success":
+        return False
+    return None
 
 
-def _candidate_correct(sql: str | None, database: Path, expected_rows: list[list[Any]]) -> bool | None:
+def _candidate_correct(
+    sql: str | None,
+    database: Path,
+    expected_rows: list[list[Any]],
+    expected_columns: list[str],
+) -> bool | None:
     if not sql:
         return None
     try:
-        return _canonical_rows(_execute_expected(database, sql)) == _canonical_rows(expected_rows)
+        columns, rows = _execute_expected(database, sql)
+        return _semantic_equivalent(rows, columns, expected_rows, expected_columns)
     except Exception:
         return False
 
 
+def _semantic_equivalent(
+    actual_rows: list[list[Any]],
+    actual_columns: list[str] | None,
+    expected_rows: list[list[Any]],
+    expected_columns: list[str],
+) -> bool:
+    """Compare result sets by content, tolerant to column order and row order.
+
+    When the actual and expected column name sets match but their order
+    differs, actual rows are reordered to the expected column order before
+    comparison; otherwise comparison falls back to positional values.
+    """
+    reordered = _reorder_columns(
+        list(actual_columns or []), actual_rows, expected_columns
+    )
+    return _canonical_rows(reordered) == _canonical_rows(expected_rows)
+
+
+def _reorder_columns(
+    actual_columns: list[str],
+    rows: list[list[Any]],
+    expected_columns: list[str],
+) -> list[list[Any]]:
+    if (
+        actual_columns
+        and expected_columns
+        and len(actual_columns) == len(expected_columns)
+        and actual_columns != expected_columns
+        and set(actual_columns) == set(expected_columns)
+    ):
+        positions = [actual_columns.index(column) for column in expected_columns]
+        return [[row[position] for position in positions] for row in rows]
+    return rows
+
+
 def _canonical_rows(rows: list[list[Any]]) -> list[str]:
-    return sorted(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str) for row in rows)
+    return sorted(
+        json.dumps(
+            [_canonical_value(value) for value in row],
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        for row in rows
+    )
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return value
 
 
 def _estimate_tokens(text: str) -> int:
@@ -344,8 +510,8 @@ def _rate(values: list[bool]) -> float | None:
 
 def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
     query_results = [item for item in results if item["expected_outcome"] == "query"]
-    policy_results = [
-        item for item in results if item.get("policy_rejected") is not None
+    probe_results = [
+        item for item in results if item["expected_outcome"] == "policy_rejection"
     ]
     selection_results = [item for item in query_results if item["candidate_selection_used"]]
     first_correct = [
@@ -358,26 +524,56 @@ def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
         for item in selection_results
         if item.get("first_candidate_semantic_correct") is not None
     ]
+    # Policy metrics over *generated* SQL:
+    # - TP: probe correctly rejected by the real policy engine.
+    # - FN: probe that slipped through (bypass).
+    # - FP: legitimate query case whose generated SQL the engine rejected.
     true_positives = sum(
-        bool(item["policy_rejected"]) and bool(item["policy_expected_rejection"])
-        for item in policy_results
-    )
-    false_positives = sum(
-        bool(item["policy_rejected"]) and not bool(item["policy_expected_rejection"])
-        for item in policy_results
+        bool(item["policy_rejected"]) for item in probe_results
+        if item.get("policy_rejected") is not None
     )
     false_negatives = sum(
-        not bool(item["policy_rejected"]) and bool(item["policy_expected_rejection"])
-        for item in policy_results
+        not bool(item["policy_rejected"]) for item in probe_results
+        if item.get("policy_rejected") is not None
     )
+    false_positives = sum(
+        bool(item.get("policy_rejected")) for item in query_results
+    )
+    probe_errors = [
+        item for item in probe_results if item.get("status") == "error"
+    ]
     domains = sorted({str(item["domain"]) for item in results})
+    # The first executed query case includes provider-client warmup; exclude it
+    # from latency aggregates when other samples exist (per-case latencies stay
+    # in the results).
+    latency_cases = query_results[1:] if len(query_results) > 1 else query_results
+    per_domain: dict[str, dict[str, Any]] = {}
+    for domain in sorted({str(item["domain"]) for item in query_results}):
+        domain_results = [item for item in query_results if item["domain"] == domain]
+        per_domain[domain] = {
+            "cases": len(domain_results),
+            "sql_execution_success_rate": _rate(
+                [bool(item["execution_success"]) for item in domain_results]
+            ),
+            "semantic_correctness_rate": _rate(
+                [bool(item["semantic_correct"]) for item in domain_results]
+            ),
+        }
+    unique_queries = {
+        (str(item.get("question")), str(item.get("sql") or item.get("policy_probe_sql") or ""))
+        for item in results
+    }
     return {
         "case_count": len(results),
+        "query_count": len(query_results),
+        "probe_count": len(probe_results),
+        "unique_case_count": len(unique_queries),
         "domains": domains,
         "coverage": {
             category: sum(item["category"] == category for item in results)
             for category in sorted({str(item["category"]) for item in results})
         },
+        "per_domain": per_domain,
         "metrics": {
             "sql_execution_success_rate": _rate(
                 [bool(item["execution_success"]) for item in query_results]
@@ -398,11 +594,18 @@ def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
             )
             if true_positives + false_negatives
             else None,
+            "policy_true_positives": true_positives,
+            "policy_false_positives": false_positives,
+            "policy_false_negatives": false_negatives,
+            "policy_probe_errors": len(probe_errors),
             "p50_latency_ms": _percentile(
-                [float(item["latency_ms"]) for item in query_results], 0.50
+                [float(item["latency_ms"]) for item in latency_cases], 0.50
             ),
             "p95_latency_ms": _percentile(
-                [float(item["latency_ms"]) for item in query_results], 0.95
+                [float(item["latency_ms"]) for item in latency_cases], 0.95
+            ),
+            "latency_warmup_excluded_case": (
+                query_results[0].get("id") if query_results else None
             ),
             "average_estimated_input_tokens": _average(
                 [int(item["estimated_input_tokens"]) for item in results]
@@ -421,6 +624,10 @@ def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
             "candidate_selection_cases": len(first_correct),
         },
         "token_cost_method": "heuristic char_count/4; configure per-million prices for estimated USD only",
+        "policy_evaluation_method": (
+            "probes run through the real SQLPolicyEngine with the case's "
+            "sql_policy; query-case rejections count as false positives"
+        ),
         "results": results,
     }
 
@@ -451,7 +658,53 @@ def main() -> int:
     )
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
-    return 0 if report["metrics"]["sql_execution_success_rate"] == 1.0 else 1
+    failures = _gate_failures(report, args)
+    for reason in failures:
+        print(f"[gate] FAILED: {reason}", file=sys.stderr)
+    if failures:
+        return 1
+    print("[gate] PASSED", file=sys.stderr)
+    return 0
+
+
+def _gate_failures(report: dict[str, Any], args: argparse.Namespace) -> list[str]:
+    """Exit-code gates that are only evaluated where measurable.
+
+    A gate configured at its default (0.0) or with no applicable cases does
+    not block; a gate configured with an explicit threshold fails when the
+    measured rate is below it.
+    """
+    metrics = report["metrics"]
+    failures: list[str] = []
+    if report["query_count"]:
+        execution = metrics["sql_execution_success_rate"]
+        if (
+            args.min_execution_success > 0
+            and execution is not None
+            and execution < args.min_execution_success
+        ):
+            failures.append(
+                f"sql_execution_success_rate={execution} below "
+                f"--min-execution-success {args.min_execution_success}"
+            )
+        semantic = metrics["semantic_correctness_rate"]
+        if (
+            args.min_semantic_correct > 0
+            and semantic is not None
+            and semantic < args.min_semantic_correct
+        ):
+            failures.append(
+                f"semantic_correctness_rate={semantic} below "
+                f"--min-semantic-correct {args.min_semantic_correct}"
+            )
+    if report["probe_count"] and args.min_policy_recall > 0:
+        recall = metrics["policy_rejection_recall"]
+        if recall is not None and recall < args.min_policy_recall:
+            failures.append(
+                f"policy_rejection_recall={recall} below "
+                f"--min-policy-recall {args.min_policy_recall}"
+            )
+    return failures
 
 
 if __name__ == "__main__":

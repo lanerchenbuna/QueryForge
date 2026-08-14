@@ -22,6 +22,13 @@
       "when": 1784885121869,
       "tag": "0002_brave_gamora",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786713558184,
+      "tag": "0003_sleepy_terrax",
+      "breakpoints": true
     }
   ]
 }

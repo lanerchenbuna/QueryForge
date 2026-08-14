@@ -64,6 +64,7 @@ export const studioRuns = sqliteTable(
     model: text("model").notNull(),
     rowCount: integer("row_count").notNull().default(0),
     duration: text("duration").notNull(),
+    isDemo: integer("is_demo", { mode: "boolean" }).notNull().default(false),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
   (table) => [

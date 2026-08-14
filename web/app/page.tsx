@@ -605,6 +605,14 @@ function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
+function chatgptUserEmail(): string | null {
+  if (typeof window === "undefined") return null;
+  const injected = (
+    window as unknown as { __CHATGPT_USER__?: { email?: string } }
+  ).__CHATGPT_USER__;
+  return injected && injected.email ? injected.email : null;
+}
+
 function Icon({ value }: { value: string }) {
   return (
     <span className="icon-glyph" aria-hidden="true">
@@ -764,7 +772,7 @@ export default function Home() {
           domainId: String(run.domain_id ?? SAMPLE_DOMAIN_ID),
           question: String(run.question),
           status:
-            String(run.status) === "Blocked"
+            String(run.status) === "blocked"
               ? ("Blocked" as const)
               : ("Passed" as const),
           model: String(run.model ?? "configured model"),
@@ -884,17 +892,23 @@ export default function Home() {
       },
       ...current.filter((item) => item.id !== nextResult.runId),
     ]);
+    const persistedRunId = /^(qf_[a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(
+      nextResult.runId,
+    )
+      ? nextResult.runId
+      : `qf_${crypto.randomUUID().replaceAll("-", "")}`;
     void fetch("/api/studio/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        id: nextResult.runId,
+        id: persistedRunId,
         domainId: activeDomain.id,
         question: submitted,
-        status: "Passed",
+        status: "success",
         model: connection === "live" ? "configured model" : "demo-model",
         rowCount: nextResult.rowCount,
         duration: connection === "live" ? "live" : "1.84s",
+        isDemo: connection !== "live",
       }),
     }).catch(() => undefined);
     setIsRunning(false);
@@ -987,6 +1001,10 @@ export default function Home() {
     uploadFiles.forEach((file) => payload.append("files", file));
     payload.append("domain_id", activeDomain.id);
     payload.append("reviewed", "true");
+    payload.append(
+      "reviewed_by",
+      chatgptUserEmail() ?? "local-workspace",
+    );
     payload.append(
       "semantic_contract",
       JSON.stringify({
@@ -1090,7 +1108,10 @@ export default function Home() {
       const response = await fetch("/api/studio/domains", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          ...input,
+          ownerEmail: chatgptUserEmail() ?? undefined,
+        }),
       });
       if (response.ok) {
         const payload = (await response.json()) as { domain: DataDomain };

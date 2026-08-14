@@ -14,7 +14,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-只读执行-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20治理-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-247%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-270%20passing-2EA44F)
 ![Semantic contracts](https://img.shields.io/badge/semantic%20checks-82%20passing-7C3AED)
 
 </div>
@@ -448,6 +448,17 @@ QueryForge 的安全保证适用于其配置后的 SQLite 执行边界。项目�
 
 请将 REST 和 MCP 接口部署在受控环境中，不要提交 Provider 密钥、运行状态，
 以及包含敏感数据的本地数据库。
+
+网络传输层无需改代码即可加固：
+
+- `QUERYFORGE_API_KEY` — 设置后，REST/Gateway 端点（`/health` 除外）要求
+  `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
+- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST` — 逗号分隔的目录列表，用于约束
+  调用方传入的 `database` / `semantic_model_path` / `sql_policy_path` 以及报告输出
+  路径。未配置时，网络传输层回退为「项目根目录 + 默认数据库所在目录」。
+
+`POST /ask/stream` 会先发送进度事件，最后以一个携带序列化答案（或 `error`）的
+终态 `final_result` 事件收尾；客户端断开连接后，运行会在下一个节点边界协作式取消。
 
 ## Roadmap
 

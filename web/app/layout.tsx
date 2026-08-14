@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { getChatGPTUser } from "./chatgpt-auth";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -56,14 +57,26 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const user = await getChatGPTUser();
+  const injectedUser = user
+    ? `window.__CHATGPT_USER__=${JSON.stringify({
+        email: user.email,
+        displayName: user.displayName,
+      }).replace(/</g, "\\u003c")};`
+    : "";
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {injectedUser ? (
+          <script dangerouslySetInnerHTML={{ __html: injectedUser }} />
+        ) : null}
+        {children}
+      </body>
     </html>
   );
 }

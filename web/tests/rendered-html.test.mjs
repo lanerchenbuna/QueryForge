@@ -51,3 +51,54 @@ test("keeps domains isolated and semantic review mandatory", async () => {
   await access(new URL("../public/og.png", import.meta.url));
   await access(new URL("../public/favicon.png", import.meta.url));
 });
+
+test("hardens Studio run history and upload attribution", async () => {
+  const [page, uploadRoute, runsRoute, schema, runtime, studioAuth, proxyRoute] =
+    await Promise.all([
+      readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+      readFile(
+        new URL("../app/api/studio/upload/route.ts", import.meta.url),
+        "utf8",
+      ),
+      readFile(
+        new URL("../app/api/studio/runs/route.ts", import.meta.url),
+        "utf8",
+      ),
+      readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+      readFile(new URL("../db/runtime.ts", import.meta.url), "utf8"),
+      readFile(new URL("../app/studio-auth.ts", import.meta.url), "utf8"),
+      readFile(
+        new URL("../app/api/queryforge/[...path]/route.ts", import.meta.url),
+        "utf8",
+      ),
+    ]);
+
+  // Run persistence: never overwrite an existing run, mark demo runs.
+  assert.match(runsRoute, /ON CONFLICT\(id\) DO NOTHING/);
+  assert.match(runsRoute, /INSERT INTO studio_runs/);
+  assert.match(runsRoute, /is_demo/);
+  assert.match(runsRoute, /RUN_STATUSES/);
+  assert.match(runsRoute, /crypto\.randomUUID\(\)/);
+  assert.match(runsRoute, /include_demo/);
+  assert.match(schema, /is_demo/);
+  assert.match(runtime, /is_demo/);
+  assert.match(runtime, /ALTER TABLE studio_runs/);
+  assert.match(page, /isDemo/);
+  assert.match(page, /reviewed_by/);
+
+  // Upload attribution: no fabricated inference/contract verdicts.
+  assert.match(uploadRoute, /reviewed_by/);
+  assert.match(uploadRoute, /csv_headers_checked/);
+  assert.match(uploadRoute, /not_verified_server_side/);
+  assert.match(uploadRoute, /contract_status/);
+  assert.doesNotMatch(uploadRoute, /human_reviewed/);
+
+  // Auth gate is configurable via STUDIO_AUTH_MODE.
+  assert.match(studioAuth, /STUDIO_AUTH_MODE/);
+  assert.match(studioAuth, /Authentication required\./);
+  assert.match(studioAuth, /oai-authenticated-user-email/);
+
+  // Proxy forwards bearer/api-key credentials upstream.
+  assert.match(proxyRoute, /authorization/);
+  assert.match(proxyRoute, /x-api-key/);
+});

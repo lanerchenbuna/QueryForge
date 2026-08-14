@@ -1,3 +1,4 @@
+import { requireStudioUser } from "@/app/studio-auth";
 import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
 
 function slugify(value: string) {
@@ -9,8 +10,10 @@ function slugify(value: string) {
     .slice(0, 48);
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const { response } = requireStudioUser(request);
+    if (response) return response;
     const { db } = getStudioBindings();
     await ensureStudioSchema(db);
     const result = await db
@@ -49,10 +52,13 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const auth = requireStudioUser(request);
+    if (auth.response) return auth.response;
     const payload = (await request.json()) as {
       name?: string;
       description?: string;
       owner?: string;
+      ownerEmail?: string;
     };
     const name = payload.name?.trim() ?? "";
     if (name.length < 2 || name.length > 80) {
@@ -70,7 +76,8 @@ export async function POST(request: Request) {
     const description =
       payload.description?.trim() ||
       "A governed data domain for source ingestion, semantic modeling, and trusted analysis.";
-    const owner = payload.owner?.trim() || "Workspace admin";
+    const owner =
+      payload.owner?.trim() || payload.ownerEmail?.trim() || "Workspace admin";
 
     await db
       .prepare(

@@ -91,6 +91,10 @@ class WorkflowError(RuntimeError):
         self.context = context
 
 
+class WorkflowCancelled(WorkflowError):
+    """Raised when a streaming client disconnects and the run should stop."""
+
+
 class Workflow:
     def __init__(self, context: Context, nodes: list[Node]) -> None:
         self.context = context
@@ -135,6 +139,7 @@ class ReflectiveWorkflow:
         max_retries: int = 2,
         analysis_hook: Callable[[Context], None] | None = None,
         candidate_hook: Callable[[Context], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         if max_retries < 0:
             raise ValueError("max_retries must be zero or greater")
@@ -153,6 +158,7 @@ class ReflectiveWorkflow:
         self.max_retries = max_retries
         self.analysis_hook = analysis_hook
         self.candidate_hook = candidate_hook
+        self.cancel_check = cancel_check
 
     def run(self) -> dict:
         for node in self.setup_nodes:
@@ -174,6 +180,7 @@ class ReflectiveWorkflow:
                 self._run_required(self.gen_sql_node)
 
         while True:
+            self._check_cancelled()
             if self.candidate_hook is not None:
                 self._run_hook("agent_candidate", self.candidate_hook)
                 if getattr(self.context, "final_output", None) is not None:
@@ -340,7 +347,16 @@ class ReflectiveWorkflow:
         return result
 
     def _run(self, node: Node) -> NodeResult:
+        self._check_cancelled()
         return _execute_observed_node(self.context, node)
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_check is not None and self.cancel_check():
+            raise WorkflowCancelled(
+                "cancelled",
+                "Workflow cancelled because the streaming client disconnected.",
+                self.context,
+            )
 
     def _run_hook(self, name: str, hook: Callable[[Context], None]) -> None:
         try:

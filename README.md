@@ -14,7 +14,7 @@ policy enforcement, bounded recovery, and production-friendly delivery interface
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-read--only-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20policy-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-247%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-270%20passing-2EA44F)
 ![Semantic contracts](https://img.shields.io/badge/semantic%20checks-82%20passing-7C3AED)
 
 </div>
@@ -472,6 +472,19 @@ project does **not** currently include:
 
 Keep REST and MCP transports inside a controlled environment. Do not commit
 provider secrets, generated run state, or local databases containing sensitive data.
+
+Network transports can be hardened without code changes:
+
+- `QUERYFORGE_API_KEY` — when set, REST/Gateway endpoints (except `/health`)
+  require `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST` — comma-separated directories
+  that confine caller-supplied `database`/`semantic_model_path`/`sql_policy_path`
+  and report output paths. Without them, network transports fall back to the
+  project root plus the default database directory.
+
+`POST /ask/stream` delivers progress events followed by one terminal
+`final_result` event carrying the serialized answer (or an `error`); clients
+that disconnect cancel the run cooperatively at the next node boundary.
 
 ## Roadmap
 

@@ -74,6 +74,10 @@ class Config:
     mcp_history_limit: int = 20
     sql_policy_path: str | None = None
     orchestration_state_root: str = DEFAULT_ORCHESTRATION_STATE_ROOT
+    # Transport hardening for network deployments (REST/Gateway/MCP).
+    api_key: str | None = None
+    allowed_database_paths: tuple[str, ...] = ()
+    allowed_report_roots: tuple[str, ...] = ()
 
     def require_api_key(self) -> str:
         if not self.llm_api_key:
@@ -227,6 +231,11 @@ def load_config(
         orchestration_state_root=os.getenv(
             "ORCHESTRATION_STATE_ROOT", DEFAULT_ORCHESTRATION_STATE_ROOT
         ),
+        api_key=_optional_string(os.getenv("QUERYFORGE_API_KEY")),
+        allowed_database_paths=_environment_paths(
+            os.getenv("DATABASE_ALLOWLIST")
+        ),
+        allowed_report_roots=_environment_paths(os.getenv("REPORT_ROOT_ALLOWLIST")),
     )
 
 
@@ -253,7 +262,7 @@ def _environment_bool(value: str | None, *, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError("SUBJECT_TREE_ENABLED must be a boolean value")
+    raise ValueError(f"environment value {value!r} must be a boolean")
 
 
 def _environment_int(value: str | None, *, default: int, minimum: int) -> int:
@@ -262,9 +271,18 @@ def _environment_int(value: str | None, *, default: int, minimum: int) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise ValueError("STREAMING_EVENT_BUFFER_SIZE must be an integer") from exc
+        raise ValueError(f"environment value {value!r} must be an integer") from exc
     if parsed < minimum:
-        raise ValueError(
-            f"STREAMING_EVENT_BUFFER_SIZE must be at least {minimum}"
-        )
+        raise ValueError(f"environment integer value must be at least {minimum}")
     return parsed
+
+
+def _environment_paths(value: str | None) -> tuple[str, ...]:
+    """Split a comma-separated path allowlist into clean, non-empty entries."""
+    if value is None:
+        return ()
+    return tuple(
+        entry.strip()
+        for entry in value.split(",")
+        if entry.strip()
+    )

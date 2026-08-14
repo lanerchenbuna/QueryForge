@@ -1,3 +1,5 @@
+import { requireStudioUser } from "@/app/studio-auth";
+
 const ALLOWED_PATHS = new Set([
   "health",
   "models",
@@ -22,12 +24,18 @@ async function proxy(
   request: Request,
   context: { params: Promise<{ path: string[] }> },
 ) {
+  const { response } = requireStudioUser(request);
+  if (response) return response;
   try {
     const { path } = await context.params;
     const target = backendUrl(path);
     const headers = new Headers();
     const contentType = request.headers.get("content-type");
     if (contentType) headers.set("content-type", contentType);
+    const authorization = request.headers.get("authorization");
+    if (authorization) headers.set("authorization", authorization);
+    const apiKey = request.headers.get("x-api-key");
+    if (apiKey) headers.set("x-api-key", apiKey);
 
     const upstream = await fetch(target, {
       method: request.method,
