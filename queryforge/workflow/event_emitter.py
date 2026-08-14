@@ -26,7 +26,12 @@ EventType = Literal[
 
 
 class WorkflowEvent(BaseModel):
-    """A progress-only event. SQL text, prompts, and result rows are excluded."""
+    """A progress-only event. SQL text, prompts, and result rows are excluded.
+
+    The terminal ``final_result`` event is the one exception: it carries the
+    serialized workflow result (or a failure message) so streaming transports
+    can deliver the answer without polling a second channel.
+    """
 
     event_id: str = Field(default_factory=lambda: f"evt_{uuid4().hex}")
     event_type: EventType
@@ -40,6 +45,8 @@ class WorkflowEvent(BaseModel):
     status: str | None = None
     message: str | None = None
     data: dict[str, Any] | None = None
+    result: dict[str, Any] | None = None
+    error: str | None = None
 
 
 class EventEmitter:

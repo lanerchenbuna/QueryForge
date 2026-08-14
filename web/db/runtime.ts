@@ -65,6 +65,7 @@ export async function ensureStudioSchema(db: D1Database) {
         model TEXT NOT NULL,
         row_count INTEGER NOT NULL DEFAULT 0,
         duration TEXT NOT NULL,
+        is_demo INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `),
@@ -83,6 +84,13 @@ export async function ensureStudioSchema(db: D1Database) {
     "domain_id",
     `ALTER TABLE studio_runs
      ADD COLUMN domain_id TEXT NOT NULL DEFAULT '${SAMPLE_DOMAIN_ID}'`,
+  );
+  await ensureColumn(
+    db,
+    "studio_runs",
+    "is_demo",
+    `ALTER TABLE studio_runs
+     ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`,
   );
 
   await db.batch([

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,6 +37,12 @@ from queryforge.domain.semantic import (
 )
 from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+
+_logger = logging.getLogger("queryforge.data_assets")
+
+# Chunk size for streaming the published unique-key set out of SQLite so a huge
+# table is never materialised in one unbounded fetchall.
+_EXISTING_KEYS_CHUNK_SIZE = 10_000
 
 
 @dataclass(frozen=True)
@@ -87,13 +93,30 @@ class DataAssetBuilder:
         config: AssetBuildConfig,
         semantic_model_output: str | Path | None = None,
     ) -> list[AssetBuildResult]:
-        """Publish one atomic data-and-semantics batch."""
+        """Publish one atomic data-and-semantics batch.
+
+        An exclusive advisory lock (``fcntl.flock``) guards the whole batch so a
+        second concurrent builder fails fast instead of racing on the publish and
+        metadata databases.
+        """
         if not config.semantic_model.reviewed:
             raise DataAssetError(
                 "Upload blocked: semantic_model.reviewed must be true after a "
                 "human has reviewed entity grain, hidden columns, relationships, "
                 "Join Paths, and metric definitions."
             )
+        lock_handle = self._acquire_builder_lock()
+        try:
+            return self._build_all_unlocked(config, semantic_model_output)
+        finally:
+            self._release_builder_lock(lock_handle)
+
+    def _build_all_unlocked(
+        self,
+        config: AssetBuildConfig,
+        semantic_model_output: str | Path | None = None,
+    ) -> list[AssetBuildResult]:
+        """The locked batch body; the builder lock is held by :meth:`build_all`."""
         self.state_root.mkdir(parents=True, exist_ok=True)
         self.publish_database.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_metadata()
@@ -127,6 +150,12 @@ class DataAssetBuilder:
                                 f"contract validation: {reason}"
                             )
                 except Exception as exc:
+                    _logger.error(
+                        "Semantic publication validation failed for %s: %s",
+                        pending_path,
+                        exc,
+                        exc_info=True,
+                    )
                     pending_path.unlink(missing_ok=True)
                     for result in results:
                         result.status = "failed"
@@ -238,6 +267,13 @@ class DataAssetBuilder:
             self._record_lineage(result, "success")
             return result
         except Exception as exc:
+            _logger.error(
+                "Asset %r build failed (run_id=%s): %s",
+                asset.name,
+                run_id,
+                exc,
+                exc_info=True,
+            )
             result.status = "failed"
             result.error = str(exc)
             result.quarantined_rows = len(quarantined)
@@ -377,11 +413,35 @@ class DataAssetBuilder:
             }
             if not set(key_columns).issubset(physical_columns):
                 return set()
-            rows = connection.execute(
-                f"SELECT {', '.join(_quote(column) for column in key_columns)} "
-                f"FROM {_quote(table)}"
-            ).fetchall()
-        return {tuple(row) for row in rows}
+            # The consumer (apply_quality_rules) needs the full key set for
+            # membership checks, so the set itself must live in memory; what we
+            # bound is the SQL read: keyset pagination by rowid streams bounded
+            # chunks instead of one unbounded fetchall of the whole table.
+            quoted_columns = ", ".join(_quote(column) for column in key_columns)
+            keys: set[tuple[Any, ...]] = set()
+            try:
+                last_rowid = 0
+                while True:
+                    rows = connection.execute(
+                        f"SELECT {quoted_columns}, rowid FROM {_quote(table)} "
+                        "WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                        (last_rowid, _EXISTING_KEYS_CHUNK_SIZE),
+                    ).fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        keys.add(tuple(row[:-1]))
+                    last_rowid = rows[-1][-1]
+            except sqlite3.OperationalError as exc:
+                if "rowid" not in str(exc).lower():
+                    raise
+                # WITHOUT ROWID table: no stable rowid to page on; fall back to a
+                # single read so behaviour matches the historical full-table load.
+                rows = connection.execute(
+                    f"SELECT {quoted_columns} FROM {_quote(table)}"
+                ).fetchall()
+                keys = {tuple(row) for row in rows}
+        return keys
 
     def _publish(
         self,
@@ -396,36 +456,48 @@ class DataAssetBuilder:
             if list(row) != columns:
                 raise DataAssetError("Normalized rows do not share a stable schema")
         with sqlite3.connect(self.publish_database) as connection:
-            table_exists = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-                (table,),
-            ).fetchone()
-            if mode == "replace":
-                connection.execute(f"DROP TABLE IF EXISTS {_quote(table)}")
-                table_exists = None
-            if not table_exists:
-                types = _infer_types(rows, columns)
-                definitions = ", ".join(
-                    f"{_quote(column)} {types[column]}" for column in columns
-                )
-                connection.execute(f"CREATE TABLE {_quote(table)} ({definitions})")
-            else:
-                existing = [
-                    str(row[1])
-                    for row in connection.execute(f"PRAGMA table_info({_quote(table)})")
-                ]
-                if existing != columns:
-                    raise DataAssetError(
-                        f"Published table {table!r} schema drift: expected {existing}, "
-                        f"received {columns}"
+            # Python's sqlite3 runs DDL in autocommit; without an explicit
+            # transaction a crash between DROP TABLE and the INSERT loop would
+            # permanently lose the previous table. BEGIN IMMEDIATE takes the
+            # write lock up front and COMMIT/ROLLBACK make the whole
+            # drop-create-insert atomic. Append mode gets the same guarantee.
+            connection.isolation_level = None
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                table_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (table,),
+                ).fetchone()
+                if mode == "replace":
+                    connection.execute(f"DROP TABLE IF EXISTS {_quote(table)}")
+                    table_exists = None
+                if not table_exists:
+                    types = _infer_types(rows, columns)
+                    definitions = ", ".join(
+                        f"{_quote(column)} {types[column]}" for column in columns
                     )
-            placeholders = ", ".join("?" for _ in columns)
-            connection.executemany(
-                f"INSERT INTO {_quote(table)} "
-                f"({', '.join(_quote(column) for column in columns)}) "
-                f"VALUES ({placeholders})",
-                [[row[column] for column in columns] for row in rows],
-            )
+                    connection.execute(f"CREATE TABLE {_quote(table)} ({definitions})")
+                else:
+                    existing = [
+                        str(row[1])
+                        for row in connection.execute(f"PRAGMA table_info({_quote(table)})")
+                    ]
+                    if existing != columns:
+                        raise DataAssetError(
+                            f"Published table {table!r} schema drift: expected {existing}, "
+                            f"received {columns}"
+                        )
+                placeholders = ", ".join("?" for _ in columns)
+                connection.executemany(
+                    f"INSERT INTO {_quote(table)} "
+                    f"({', '.join(_quote(column) for column in columns)}) "
+                    f"VALUES ({placeholders})",
+                    [[row[column] for column in columns] for row in rows],
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
         return len(rows)
 
     def _upsert_semantic_catalog(self, asset: DataAssetSpec, table: str) -> None:
@@ -607,24 +679,134 @@ class DataAssetBuilder:
         publish_backup = self.state_root / f".publish-{token}.sqlite"
         metadata_backup = self.state_root / f".metadata-{token}.sqlite"
         publish_existed = self.publish_database.is_file()
-        if publish_existed:
-            shutil.copy2(self.publish_database, publish_backup)
-        shutil.copy2(self.metadata_database, metadata_backup)
+        if not self.metadata_database.is_file():
+            raise DataAssetError(
+                "Cannot checkpoint publication: metadata database does not exist: "
+                f"{self.metadata_database}"
+            )
+        try:
+            if publish_existed:
+                self._backup_database(self.publish_database, publish_backup)
+            self._backup_database(self.metadata_database, metadata_backup)
+        except Exception as exc:
+            _logger.error(
+                "Failed to create publication checkpoint for %s: %s",
+                self.publish_database,
+                exc,
+                exc_info=True,
+            )
+            raise
         return _PublicationCheckpoint(
             publish_existed=publish_existed,
             publish_backup=publish_backup,
             metadata_backup=metadata_backup,
         )
 
+    @staticmethod
+    def _backup_database(source: Path, destination: Path) -> None:
+        """Snapshot one SQLite database with the :meth:`sqlite3.Connection.backup`
+        API instead of a raw file copy.
+
+        ``backup()`` reads a transactionally consistent snapshot even while the
+        source uses ``journal_mode=WAL``, which ``shutil.copy2`` cannot guarantee
+        (it would miss committed data still sitting in the ``-wal`` file).
+        ``PRAGMA wal_checkpoint(TRUNCATE)`` first folds any WAL content into the
+        main file, so the checkpoint file is self-contained and unambiguous (a
+        no-op for rollback-journal databases)."""
+        destination.unlink(missing_ok=True)
+        source_connection = sqlite3.connect(source)
+        try:
+            source_connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            destination_connection = sqlite3.connect(destination)
+            try:
+                source_connection.backup(destination_connection)
+            finally:
+                destination_connection.close()
+        finally:
+            source_connection.close()
+
     def _restore_publication_checkpoint(
         self, checkpoint: "_PublicationCheckpoint"
     ) -> None:
-        if checkpoint.publish_existed:
-            shutil.copy2(checkpoint.publish_backup, self.publish_database)
-        else:
-            self.publish_database.unlink(missing_ok=True)
-        shutil.copy2(checkpoint.metadata_backup, self.metadata_database)
-        self._discard_publication_checkpoint(checkpoint)
+        failures: list[tuple[str, BaseException]] = []
+        try:
+            if checkpoint.publish_existed:
+                self._restore_from_backup(checkpoint.publish_backup, self.publish_database)
+            else:
+                self.publish_database.unlink(missing_ok=True)
+                self._remove_sidecar_files(self.publish_database)
+        except Exception as exc:
+            failures.append(("publish", exc))
+            _logger.error(
+                "Failed to restore publish database %s from checkpoint %s: %s",
+                self.publish_database,
+                checkpoint.publish_backup,
+                exc,
+                exc_info=True,
+            )
+        try:
+            self._restore_from_backup(checkpoint.metadata_backup, self.metadata_database)
+        except Exception as exc:
+            failures.append(("metadata", exc))
+            _logger.error(
+                "Failed to restore metadata database %s from checkpoint %s: %s",
+                self.metadata_database,
+                checkpoint.metadata_backup,
+                exc,
+                exc_info=True,
+            )
+        # Only discard a snapshot once its restore succeeded; keep failed ones for
+        # manual recovery.
+        if checkpoint.publish_existed and not any(
+            name == "publish" for name, _ in failures
+        ):
+            checkpoint.publish_backup.unlink(missing_ok=True)
+        if not any(name == "metadata" for name, _ in failures):
+            checkpoint.metadata_backup.unlink(missing_ok=True)
+        if failures:
+            raise failures[0][1]
+
+    @staticmethod
+    def _restore_from_backup(backup: Path, target: Path) -> None:
+        """Restore ``target`` from a snapshot produced by :meth:`_backup_database`.
+
+        Stale ``-wal``/``-shm``/``-journal`` sidecars of the live target must be
+        removed around the restore: SQLite would otherwise replay pre-rollback
+        writes from them over the restored snapshot and corrupt or revert it. The
+        restored file is a complete snapshot, so it must be read without any
+        leftover sidecars. A final read-only open smoke-tests the result."""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        DataAssetBuilder._remove_sidecar_files(target)
+        target.unlink(missing_ok=True)
+        source_connection = sqlite3.connect(backup)
+        try:
+            destination_connection = sqlite3.connect(target)
+            try:
+                source_connection.backup(destination_connection)
+            finally:
+                destination_connection.close()
+        finally:
+            source_connection.close()
+        DataAssetBuilder._remove_sidecar_files(target)
+        # backup() copies the source's page header verbatim, so a snapshot of a
+        # WAL database restores with journal_mode=WAL and would immediately
+        # recreate -wal/-shm sidecars on the next open (even read-only). Normalise
+        # the restored file to rollback-journal mode so it is fully self-contained
+        # and safe to open read-only without any stale sidecars.
+        with sqlite3.connect(target) as connection:
+            connection.execute("PRAGMA journal_mode=DELETE").fetchone()
+        DataAssetBuilder._remove_sidecar_files(target)
+        read_only = sqlite3.connect(f"{target.as_uri()}?mode=ro", uri=True)
+        try:
+            read_only.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        finally:
+            read_only.close()
+
+    @staticmethod
+    def _remove_sidecar_files(database: Path) -> None:
+        """Delete WAL/SHM/hot-journal files that may shadow a restored database."""
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(str(database) + suffix).unlink(missing_ok=True)
 
     @staticmethod
     def _discard_publication_checkpoint(
@@ -632,6 +814,50 @@ class DataAssetBuilder:
     ) -> None:
         checkpoint.publish_backup.unlink(missing_ok=True)
         checkpoint.metadata_backup.unlink(missing_ok=True)
+
+    def _acquire_builder_lock(self) -> Any:
+        """Take an exclusive advisory lock (``fcntl.flock``) for the whole batch.
+
+        A second concurrent builder fails fast with :class:`DataAssetError`
+        instead of racing on the publish/metadata databases. The lock file is left
+        in place after release — flock is tied to the open file description, so
+        unlinking it would only invite races on a fresh inode. Platforms without
+        ``fcntl`` (e.g. some Windows builds) degrade to a logged no-op."""
+        lock_path = self.publish_database.with_name(
+            self.publish_database.name + ".lock"
+        )
+        try:
+            import fcntl
+        except ImportError:
+            _logger.warning(
+                "fcntl unavailable; skipping builder lock for %s "
+                "(concurrent builds are not protected on this platform).",
+                self.publish_database,
+            )
+            return None
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise DataAssetError(
+                "Another data-asset build is already publishing to "
+                f"{self.publish_database}; concurrent builders are not allowed "
+                f"(advisory lock held: {lock_path})."
+            ) from exc
+        return handle
+
+    @staticmethod
+    def _release_builder_lock(handle: Any) -> None:
+        if handle is None:
+            return
+        try:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
     def _validate_semantic_publication(self, path: Path):
         with SQLiteConnector(str(self.publish_database)) as connector:
@@ -702,19 +928,28 @@ def _replace_table(database: Path, table: str, rows: list[dict[str, Any]]) -> No
         if list(row) != columns:
             raise DataAssetError("Normalized rows do not share a stable schema")
     with sqlite3.connect(database) as connection:
-        connection.execute(f"DROP TABLE IF EXISTS {_quote(table)}")
-        types = _infer_types(rows, columns)
-        connection.execute(
-            f"CREATE TABLE {_quote(table)} ("
-            + ", ".join(f"{_quote(column)} {types[column]}" for column in columns)
-            + ")"
-        )
-        connection.executemany(
-            f"INSERT INTO {_quote(table)} "
-            f"({', '.join(_quote(column) for column in columns)}) "
-            f"VALUES ({', '.join('?' for _ in columns)})",
-            [[row[column] for column in columns] for row in rows],
-        )
+        # Same DDL-in-autocommit hazard as _publish: wrap drop/create/insert in an
+        # explicit transaction so a mid-batch failure rolls the old table back.
+        connection.isolation_level = None
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(f"DROP TABLE IF EXISTS {_quote(table)}")
+            types = _infer_types(rows, columns)
+            connection.execute(
+                f"CREATE TABLE {_quote(table)} ("
+                + ", ".join(f"{_quote(column)} {types[column]}" for column in columns)
+                + ")"
+            )
+            connection.executemany(
+                f"INSERT INTO {_quote(table)} "
+                f"({', '.join(_quote(column) for column in columns)}) "
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                [[row[column] for column in columns] for row in rows],
+            )
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 def _infer_types(rows: list[dict[str, Any]], columns: Iterable[str]) -> dict[str, str]:

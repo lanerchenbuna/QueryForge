@@ -135,6 +135,7 @@ class WorkflowRunner:
         report_output_dir: str | None = None,
         report_max_rows: int | None = None,
         report_max_charts: int | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config
         self.llm_factory = llm_factory
@@ -191,6 +192,7 @@ class WorkflowRunner:
         self.report_output_dir = report_output_dir or config.report_output_dir
         self.report_max_rows = report_max_rows or config.report_max_rows
         self.report_max_charts = report_max_charts or config.report_max_charts
+        self.cancel_check = cancel_check
 
     @classmethod
     def describe_workflow(cls) -> str:
@@ -413,6 +415,7 @@ class WorkflowRunner:
                     if self.candidate_hook is not None
                     else None
                 ),
+                cancel_check=self.cancel_check,
             ).run()
             if self.completion_hook is not None:
                 try:

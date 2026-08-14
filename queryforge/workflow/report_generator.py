@@ -247,7 +247,9 @@ th,td{{border:1px solid #e5e7eb;padding:8px;text-align:left}} th{{background:#f3
             )
             return f"<section><h2>{title}</h2>{notice}<table><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table></section>"
         if section.type == "chart":
-            spec = json.dumps(content["spec"], ensure_ascii=False)
+            # Escape "</" so user-controlled spec values (question titles and
+            # result cells) can never terminate the enclosing <script> tag.
+            spec = json.dumps(content["spec"], ensure_ascii=False).replace("</", "<\\/")
             fallback = ReportGenerator._chart_fallback_svg(content["spec"])
             return (
                 f'<section><h2>{title}</h2><p>{html.escape(content["reason"])}</p>'

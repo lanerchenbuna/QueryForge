@@ -1,0 +1,1 @@
+ALTER TABLE `studio_runs` ADD `is_demo` integer DEFAULT false NOT NULL;

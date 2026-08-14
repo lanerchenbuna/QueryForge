@@ -9,6 +9,11 @@ from typing import Callable
 
 from queryforge.workflow.event_emitter import EventEmitter, emit_event
 from queryforge.workflow.workflow_runner import WorkflowRunner
+from queryforge.workflow.workflow import WorkflowCancelled
+from queryforge.interfaces.transport_security import (
+    NETWORK_ENTRYPOINTS,
+    validate_transport_options,
+)
 from queryforge.orchestration.agents.entry_router import EntryRouterAgent
 from queryforge.orchestration.agents.product_analyst import ProductAnalystAgent
 from queryforge.orchestration.agents.sql_review import SQLReviewAgent
@@ -74,7 +79,9 @@ class AgentService(ResourceService):
         run_id = resolved_options.run_id or new_run_id()
         resolved_options = replace(resolved_options, run_id=run_id)
         emitter = EventEmitter(config.streaming_event_buffer_size)
-        stream = WorkflowEventStream(emitter)
+        stream = WorkflowEventStream(
+            emitter, queue_maxsize=config.streaming_event_buffer_size
+        )
         emitter.on_event(stream._publish)
 
         def worker() -> None:
@@ -91,6 +98,7 @@ class AgentService(ResourceService):
                     resolved_options,
                     plan_only=False,
                     event_emitter=emitter,
+                    cancel_check=stream.is_cancelled,
                 )
                 emit_event(
                     emitter,
@@ -98,6 +106,22 @@ class AgentService(ResourceService):
                     run_id,
                     status=str(stream.result.get("status") or "success"),
                     message="QueryForge workflow completed.",
+                    result=stream.result,
+                )
+            except WorkflowCancelled:
+                stream.result = {
+                    "status": "cancelled",
+                    "run_id": run_id,
+                    "question": question,
+                    "reason": "Client disconnected before the workflow completed.",
+                }
+                emit_event(
+                    emitter,
+                    "final_result",
+                    run_id,
+                    status="cancelled",
+                    message="QueryForge workflow was cancelled.",
+                    result=stream.result,
                 )
             except Exception as exc:
                 stream.error = exc
@@ -107,6 +131,7 @@ class AgentService(ResourceService):
                     run_id,
                     status="failed",
                     message="QueryForge workflow failed.",
+                    error=str(exc),
                 )
             finally:
                 stream._close()
@@ -153,6 +178,7 @@ class AgentService(ResourceService):
         *,
         plan_only: bool,
         event_emitter: EventEmitter | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict:
         question = question.strip()
         if not question:
@@ -163,6 +189,8 @@ class AgentService(ResourceService):
             model_override=options.model,
         )
         options.validate_for_config(config)
+        if options.entrypoint in NETWORK_ENTRYPOINTS:
+            validate_transport_options(config, options)
         database = options.database or config.database_path
         path = Path(database).expanduser()
         if not path.is_file():
@@ -256,6 +284,7 @@ class AgentService(ResourceService):
             "report_output_dir": options.report_output_dir,
             "report_max_rows": options.report_max_rows,
             "report_max_charts": options.report_max_charts,
+            "cancel_check": cancel_check,
         }
         runner_kwargs["run_id_factory"] = lambda: run_id
         task = SqlTask(question=question, database_path=str(path))

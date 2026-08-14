@@ -121,16 +121,81 @@ class StreamingTest(unittest.TestCase):
         self.assertIn("phase_completed", event_types)
         self.assertIn("artifact_created", event_types)
         self.assertEqual(event_types[-1], "final_result")
+        terminal = events[-1]
+        self.assertEqual(terminal.result["rows"], [["alpha"]])
+        self.assertIsNone(terminal.error)
+        # Progress events never leak SQL or rows; only the terminal event carries
+        # the serialized answer.
         serialized = json.dumps(
-            [event.model_dump(mode="json") for event in events],
+            [event.model_dump(mode="json") for event in events[:-1]],
             ensure_ascii=False,
         )
         self.assertNotIn("SELECT", serialized)
         self.assertNotIn("alpha", serialized)
         self.assertNotIn("rows", serialized)
 
+    def test_stream_cancel_stops_workflow_and_reports_cancelled(self):
+        import threading
+
+        class BlockingLLM:
+            def __init__(self) -> None:
+                self.release = threading.Event()
+
+            def generate_json(self, prompt: str) -> dict:
+                self.release.wait(timeout=15)
+                return {"skills": [], "reason": "No optional skill."}
+
+        blocking = BlockingLLM()
+        service = AgentService(
+            config_loader=lambda **_: self.config,
+            llm_factory=lambda _: blocking,
+        )
+        event_stream = service.stream(
+            "List item names",
+            self.options("stream_cancel"),
+        )
+        first = next(event_stream)
+        self.assertEqual(first.event_type, "run_started")
+        event_stream.cancel()
+        blocking.release.set()
+        events = [first, *event_stream]
+        terminal = events[-1]
+        self.assertEqual(terminal.event_type, "final_result")
+        self.assertEqual(terminal.status, "cancelled")
+        self.assertEqual(terminal.result["status"], "cancelled")
+        self.assertIsNone(event_stream.error)
+        self.assertEqual(event_stream.result["status"], "cancelled")
+
+    def test_event_stream_queue_is_bounded_and_terminal_is_never_dropped(self):
+        from queryforge.application.event_stream import WorkflowEventStream
+
+        emitter = EventEmitter(buffer_size=2)
+        stream = WorkflowEventStream(emitter, queue_maxsize=2)
+        for index in range(5):
+            stream._publish(
+                WorkflowEvent(
+                    event_type="node_started",
+                    run_id="qf_bounded",
+                    node_name=f"node_{index}",
+                )
+            )
+        stream._publish(
+            WorkflowEvent(
+                event_type="final_result",
+                run_id="qf_bounded",
+                status="success",
+                result={"status": "success", "rows": [["kept"]]},
+            )
+        )
+        stream._close()
+        events = list(stream)
+        self.assertEqual(events[-1].event_type, "final_result")
+        self.assertEqual(events[-1].result["rows"], [["kept"]])
+        # Progress events may be dropped, but the queue never grew unbounded.
+        self.assertLessEqual(len(events), 3)
+
     @unittest.skipUnless(FASTAPI_AVAILABLE, "optional FastAPI dependencies not installed")
-    def test_api_sse_returns_progress_only_events(self):
+    def test_api_sse_delivers_progress_then_terminal_result(self):
         from fastapi.testclient import TestClient
 
         response = TestClient(create_app(self.service())).post(
@@ -150,8 +215,11 @@ class StreamingTest(unittest.TestCase):
         ]
         self.assertEqual(payloads[0]["event_type"], "run_started")
         self.assertEqual(payloads[-1]["event_type"], "final_result")
-        self.assertNotIn("rows", response.text)
-        self.assertNotIn("SELECT", response.text)
+        # Progress events stay clean; the terminal event carries the answer.
+        progress_text = json.dumps(payloads[:-1], ensure_ascii=False)
+        self.assertNotIn("rows", progress_text)
+        self.assertNotIn("SELECT", progress_text)
+        self.assertEqual(payloads[-1]["result"]["rows"], [["alpha"]])
 
     def test_cli_stream_writes_progress_to_stderr_and_json_to_stdout(self):
         class FakeStream:
