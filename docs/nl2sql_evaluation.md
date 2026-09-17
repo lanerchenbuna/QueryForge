@@ -75,8 +75,29 @@ measured — not just the static read-only rejections.
 - `per_domain`: per-domain execution-success and semantic-correctness rates.
 
 The report also exposes `query_count`, `probe_count`, and `unique_case_count`
-so coverage is reported honestly (exact duplicate question+SQL pairs are
-counted once in `unique_case_count`).
+so coverage is reported honestly (uniqueness is computed from a fingerprint of
+the original case definition — question + expected SQL/probe — not from the
+generated output).
+
+## Comparison Policy and State Isolation
+
+Result comparison is deterministic and declared:
+
+- Row order is ignored (multiset comparison); duplicate rows are preserved —
+  the comparison never deduplicates with a set.
+- Column order is tolerated when the column name sets match.
+- NULL compares equal to NULL only.
+- Integral floats compare equal to ints; non-integral floats are rounded to 10
+  decimals (float-noise tolerance); non-finite floats compare as
+  `"Infinity"` / `"-Infinity"` / `"NaN"`.
+- `oracle_latency_ms` (time to execute the expected SQL) is recorded per case
+  and reported alongside service latency (`average_service_latency_ms` /
+  `average_oracle_latency_ms`).
+
+Every evaluation run redirects SQL history, orchestration state, and the vector
+knowledge base into an isolated root (`.queryforge/evaluation_assets/isolated/`
+by default), so evaluation never pollutes production retrieval or session
+state; the report's `state_isolation` block documents the resolved paths.
 
 ## Exit-Code Gates
 

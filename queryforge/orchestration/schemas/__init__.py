@@ -21,6 +21,11 @@ TaskStatus = Literal[
     "blocked",
     "failed",
     "completed",
+    # A run stopped because its client went away (step 14) is persisted with this
+    # status by ``agent_service.persist_cancelled_outcome``. The value has to stay
+    # in this vocabulary, otherwise the cancelled ``state.json`` cannot be
+    # validated back into :class:`TaskState` by any reader.
+    "cancelled",
 ]
 ArtifactStatus = Literal["valid", "warning", "blocked", "degraded"]
 VALID_ARTIFACT_STATUSES: set[str] = {"valid", "warning", "blocked", "degraded"}

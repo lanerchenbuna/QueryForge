@@ -6,12 +6,35 @@ const ALLOWED_PATHS = new Set([
   "skills",
   "ask",
   "ask/stream",
+  "analyze",
   "plan",
 ]);
 
+function isAllowedPath(parts: string[]): boolean {
+  const path = parts.join("/");
+  if (ALLOWED_PATHS.has(path)) return true;
+  // Dynamic publish route: /domains/{domain_id}/publish (step 03).
+  return (
+    parts.length === 3 &&
+    parts[0] === "domains" &&
+    parts[2] === "publish"
+  );
+}
+
+/**
+ * SSE runs are long-lived by design: the client aborts them through its own
+ * `AbortController` (the Cancel button), so the proxy must not impose the
+ * single-response timeout on `/ask/stream`. A timeout there would truncate the
+ * stream mid-run and make the Studio report "stream ended without a terminal
+ * event" for a run that was still healthy.
+ */
+function isEventStreamPath(parts: string[]): boolean {
+  return parts.join("/") === "ask/stream";
+}
+
 function backendUrl(parts: string[]) {
   const path = parts.join("/");
-  if (!ALLOWED_PATHS.has(path)) {
+  if (!isAllowedPath(parts)) {
     throw new Error("Unsupported QueryForge API route.");
   }
   const base = (
@@ -44,7 +67,9 @@ async function proxy(
         request.method === "GET" || request.method === "HEAD"
           ? undefined
           : await request.arrayBuffer(),
-      signal: AbortSignal.timeout(120_000),
+      signal: isEventStreamPath(path)
+        ? request.signal
+        : AbortSignal.any([request.signal, AbortSignal.timeout(120_000)]),
     });
 
     const responseHeaders = new Headers();
@@ -53,6 +78,12 @@ async function proxy(
       upstream.headers.get("content-type") ?? "application/json",
     );
     responseHeaders.set("cache-control", "no-store");
+    // The event protocol version is part of the contract: forward it so the
+    // consumer can detect a version it does not speak instead of guessing.
+    const protocol = upstream.headers.get("x-queryforge-event-protocol");
+    if (protocol) {
+      responseHeaders.set("x-queryforge-event-protocol", protocol);
+    }
 
     return new Response(upstream.body, {
       status: upstream.status,

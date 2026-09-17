@@ -8,6 +8,7 @@ import time
 from queryforge.workflow.node.base import Node
 from queryforge.workflow.node.gen_sql_node import GenSqlNode
 from queryforge.workflow.sql_selector import SQLSelector
+from queryforge.domain.semantic import QuerySpecCompiler
 from queryforge.infrastructure.models.base import BaseModelProvider, ModelResponseError
 from queryforge.core.schemas.models import (
     Context,
@@ -22,6 +23,12 @@ class ParallelCandidatesNode(Node):
     name = "parallel_candidates"
     description = "Generate bounded SQL candidates and select the best preview"
 
+    #: One deterministic QuerySpec candidate is appended after the generated
+    #: ones, and it must still fit the selector's preview ceiling to compete, so
+    #: the generated-candidate bound is derived from that ceiling instead of
+    #: duplicating the number.
+    MAX_CANDIDATES = SQLSelector.MAX_PREVIEW - 1
+
     def __init__(
         self,
         llm: BaseModelProvider,
@@ -33,8 +40,10 @@ class ParallelCandidatesNode(Node):
         preview_timeout_seconds: float = 10,
         selector_weights: dict[str, float] | None = None,
     ) -> None:
-        if candidate_count < 2 or candidate_count > 3:
-            raise ValueError("candidate_count must be between 2 and 3")
+        if candidate_count < 2 or candidate_count > self.MAX_CANDIDATES:
+            raise ValueError(
+                f"candidate_count must be between 2 and {self.MAX_CANDIDATES}"
+            )
         self.llm = llm
         self.database_tool = database_tool
         self.candidate_count = candidate_count
@@ -68,8 +77,18 @@ class ParallelCandidatesNode(Node):
             candidate if candidate is not None else self._generation_error(index, None)
             for index, candidate in enumerate(candidates)
         ]
-        selection = self.selector.select(resolved_candidates, context)
+        # Step 07: add ONE deterministic candidate compiled from the governed
+        # metric request. It passes through exactly the same selector hard gates
+        # (AST policy -> semantic validator -> preview).
+        spec_candidate = self._query_spec_candidate(context, len(resolved_candidates))
+        if spec_candidate is not None:
+            resolved_candidates.append(spec_candidate)
+        selection = self._selector_for(len(resolved_candidates)).select(
+            resolved_candidates, context
+        )
         selection["candidate_count"] = self.candidate_count
+        selection["total_candidates"] = len(resolved_candidates)
+        selection["query_spec_candidate"] = spec_candidate is not None
         selection["generation_mode"] = "concurrent"
         selection["generation_duration_ms"] = round(
             (time.monotonic() - started) * 1000,
@@ -94,7 +113,29 @@ class ParallelCandidatesNode(Node):
         context.reasoning_result = context.sql_context.reasoning_result
         context.reasoning_validation = context.sql_context.reasoning_validation
         return self.success(
-            f"Selected candidate {selected_index + 1}/{self.candidate_count}"
+            f"Selected candidate {selected_index + 1}/{len(resolved_candidates)}"
+        )
+
+    def _query_spec_candidate(self, context: Context, index: int) -> dict | None:
+        """Deterministic compiled candidate for a matched metric request."""
+        spec = QuerySpecCompiler.for_context(
+            context,
+            limit=max(self.selector.preview_limit, 100),
+        )
+        if spec is None:
+            return None
+        return spec.to_candidate(index)
+
+    def _selector_for(self, candidate_total: int) -> SQLSelector:
+        """Selector whose preview budget also covers the deterministic candidate."""
+        if candidate_total <= self.selector.max_preview:
+            return self.selector
+        return SQLSelector(
+            self.database_tool,
+            max_preview=candidate_total,
+            preview_limit=self.selector.preview_limit,
+            timeout_seconds=self.selector.timeout_seconds,
+            weights=self.selector.weights,
         )
 
     def _generate_candidate(self, prompt: str, index: int) -> dict:

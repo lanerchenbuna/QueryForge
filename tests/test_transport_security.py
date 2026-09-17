@@ -197,6 +197,162 @@ class TransportSecurityTest(unittest.TestCase):
                 ),
             )
 
+    # ------------------------------------------------- /analyze allowlist (H4)
+
+    def planner(self):
+        from queryforge.application.analysis_planner import AnalysisPlannerService
+
+        return AnalysisPlannerService(config_loader=lambda **_: self.config)
+
+    def test_planning_service_applies_the_network_allowlist_before_opening_files(self):
+        planner = self.planner()
+        with self.assertRaisesRegex(ValueError, "outside the allowed transport paths"):
+            planner.analyze(
+                "How many items are there?",
+                database=str(self.outside),
+                entrypoint="api",
+            )
+        # The allowlist is consulted *before* the path is opened: a nonexistent
+        # outside file is refused for being outside, not for being missing.
+        missing = self.outside_root / "missing.sqlite"
+        with self.assertRaisesRegex(ValueError, "outside the allowed transport paths"):
+            planner.analyze(
+                "How many items are there?",
+                database=str(missing),
+                entrypoint="api",
+            )
+        # The semantic model and the SQL policy are caller-supplied paths too.
+        with self.assertRaisesRegex(ValueError, "semantic_model_path"):
+            planner.analyze(
+                "How many items are there?",
+                database=str(self.database),
+                semantic_model_path=str(self.outside_root / "model.yml"),
+                entrypoint="api",
+            )
+        with self.assertRaisesRegex(ValueError, "sql_policy_path"):
+            planner.analyze(
+                "How many items are there?",
+                database=str(self.database),
+                sql_policy_path=str(self.outside_root / "policy.yml"),
+                entrypoint="api",
+            )
+
+    def test_api_analysis_schema_is_held_to_the_network_allowlist(self):
+        """The API request schema names its transport, so the planner refuses it."""
+        from queryforge.interfaces.api.schemas import AnalyzeRequest
+
+        request = AnalyzeRequest(
+            question="How many items are there?", database=str(self.outside)
+        )
+        with self.assertRaisesRegex(ValueError, "outside the allowed transport paths"):
+            self.planner().analyze(request.question, **request.to_kwargs())
+
+    def test_local_analysis_without_an_entrypoint_keeps_todays_behaviour(self):
+        payload = self.planner().analyze(
+            "How many items are there?", database=str(self.outside)
+        )
+        # No entrypoint means a local caller: it reaches the planner (and asks for
+        # a governed metric) instead of being refused by the transport allowlist.
+        self.assertEqual(payload["status"], "needs_clarification")
+        self.assertEqual(payload["stop_reason"], "no_governed_metric_match")
+
+    # ------------------------------------------- /ask vs /ask/stream contract (M6)
+
+    def stream_service(self, config: Config | None = None) -> AgentService:
+        return AgentService(
+            config_loader=lambda **_: config or self.config,
+            llm_factory=lambda _: TransportLLM(),
+        )
+
+    def test_stream_refuses_before_starting_a_worker(self):
+        """M6: the stream entry point validates synchronously, like ``ask``."""
+        with self.assertRaisesRegex(ValueError, "outside the allowed transport paths"):
+            self.stream_service().stream(
+                "List names",
+                AgentOptions(
+                    database=str(self.outside),
+                    skills=[],
+                    entrypoint="api_stream",
+                    orchestration_state_root=str(self.root / "runs"),
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "SQLite database does not exist"):
+            self.stream_service().stream(
+                "List names",
+                AgentOptions(
+                    database=str(self.root / "missing.sqlite"),
+                    skills=[],
+                    entrypoint="api_stream",
+                    orchestration_state_root=str(self.root / "runs"),
+                ),
+            )
+
+    @unittest.skipUnless(FASTAPI_AVAILABLE, "optional FastAPI dependencies not installed")
+    def test_stream_route_refuses_exactly_what_ask_refuses(self):
+        """M6: /ask/stream answered 200 + a failed terminal event for a 400 request."""
+        from fastapi.testclient import TestClient
+
+        from queryforge.interfaces.api.app import create_app
+
+        restricted = replace(
+            self.config, allowed_database_paths=(str(self.root),)
+        )
+        client = TestClient(create_app(self.stream_service(restricted)))
+        cases = {
+            "database outside the transport allowlist": {
+                "database": str(self.outside)
+            },
+            "database does not exist": {
+                "database": str(self.root / "missing.sqlite")
+            },
+            "invalid run options": {"tool_loop_max_rounds": 99},
+            "unknown data domain": {"domain_id": "unknown_domain"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                body = {"question": "List names", "skills": [], **overrides}
+                ask = client.post("/ask", json=body)
+                stream = client.post("/ask/stream", json=body)
+                self.assertEqual(ask.status_code, 400, ask.text)
+                self.assertEqual(stream.status_code, 400, stream.text)
+                # Same refusal, same reason: the two routes cannot disagree.
+                self.assertEqual(stream.json()["detail"], ask.json()["detail"])
+                self.assertNotIn("event-stream", stream.headers.get("content-type", ""))
+
+    @unittest.skipUnless(FASTAPI_AVAILABLE, "optional FastAPI dependencies not installed")
+    def test_stream_route_applies_the_semantic_gate_before_streaming(self):
+        from fastapi.testclient import TestClient
+
+        from queryforge.interfaces.api.app import create_app
+
+        gated = replace(self.config, require_semantic_model=True)
+        client = TestClient(create_app(self.stream_service(gated)))
+        body = {"question": "List names", "database": str(self.database), "skills": []}
+        ask = client.post("/ask", json=body)
+        stream = client.post("/ask/stream", json=body)
+        self.assertEqual(ask.status_code, 400, ask.text)
+        self.assertEqual(stream.status_code, 400, stream.text)
+        self.assertIn("semantic layer is required", stream.json()["detail"])
+        self.assertEqual(stream.json()["detail"], ask.json()["detail"])
+
+    @unittest.skipUnless(FASTAPI_AVAILABLE, "optional FastAPI dependencies not installed")
+    def test_a_valid_stream_request_still_streams(self):
+        from fastapi.testclient import TestClient
+
+        from queryforge.interfaces.api.app import create_app
+
+        client = TestClient(create_app(self.stream_service()))
+        response = client.post(
+            "/ask/stream",
+            json={"question": "List names", "database": str(self.database), "skills": []},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers["content-type"].split(";")[0], "text/event-stream"
+        )
+        self.assertIn('"event_type":"run_started"', response.text)
+        self.assertIn('"event_type":"final_result"', response.text)
+
     def test_report_roots_default_to_configured_output_dir(self):
         self.assertEqual(report_roots(self.config), ((self.root / "reports").resolve(),))
 
@@ -219,6 +375,38 @@ class TransportSecurityTest(unittest.TestCase):
             json={"question": "List names", "database": str(self.database)},
         )
         self.assertEqual(allowed.status_code, 200)
+
+    @unittest.skipUnless(FASTAPI_AVAILABLE, "optional FastAPI dependencies not installed")
+    def test_unloadable_config_fails_closed_instead_of_serving_anonymously(self):
+        """M4: a broken config used to disable the API-key gate entirely."""
+        from fastapi.testclient import TestClient
+
+        from queryforge.interfaces.api.app import create_app
+
+        def broken_loader(**_):
+            raise RuntimeError("models.yml is unreadable")
+
+        service = AgentService(
+            config_loader=broken_loader, llm_factory=lambda _: TransportLLM()
+        )
+        client = TestClient(create_app(service))
+
+        # The public liveness route keeps working, so a deployment can still be
+        # probed while its configuration is broken.
+        self.assertEqual(client.get("/health").status_code, 200)
+        # Everything else is refused: whether this deployment requires an API key
+        # is unknown, so serving the route anonymously is not an option.
+        for method, path, body in (
+            ("get", "/skills", None),
+            ("get", "/models", None),
+            ("post", "/ask", {"question": "List names", "database": str(self.database)}),
+            ("get", "/report/qf_missing", None),
+        ):
+            response = getattr(client, method)(path, json=body) if body else getattr(
+                client, method
+            )(path)
+            self.assertEqual(response.status_code, 503, path)
+            self.assertIn("configuration", response.json()["detail"])
 
 
 if __name__ == "__main__":

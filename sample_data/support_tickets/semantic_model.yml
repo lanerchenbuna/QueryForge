@@ -1,0 +1,279 @@
+version: 1
+name: support_tickets
+description: Governed semantics for a synthetic customer support operations dataset.
+entities:
+- name: calendar
+  table: dim_date
+  description: Conformed support calendar shared by tickets and survey responses.
+  entity_type: dimension
+  synonyms: [date, calendar, day]
+  primary_key: [date_key]
+  grain: [date_key]
+  expected_columns: [date_key, full_date, year, quarter, month_number, month_name, week_of_year,
+    day_of_week, is_weekend]
+  dimensions:
+  - name: date
+    column: full_date
+    synonyms: [full date, ticket date]
+  - name: year
+    column: year
+    synonyms: [calendar year]
+  - name: quarter
+    column: quarter
+    synonyms: [calendar quarter]
+  - name: month
+    column: month_name
+    synonyms: [calendar month]
+  - name: month_number
+    column: month_number
+    synonyms: [month index]
+  - name: week_of_year
+    column: week_of_year
+    synonyms: [week]
+  - name: day_of_week
+    column: day_of_week
+    synonyms: [weekday]
+  - name: weekend
+    column: is_weekend
+- name: agent
+  table: dim_agent
+  description: Support agent with team, region, and seniority attributes.
+  entity_type: dimension
+  synonyms: [agent, advisor, representative]
+  primary_key: [agent_id]
+  grain: [agent_id]
+  expected_columns: [agent_id, agent_name, team, region, seniority, active_flag, hire_year]
+  dimensions:
+  - name: name
+    column: agent_name
+    synonyms: [agent name]
+  - name: team
+    column: team
+    synonyms: [support team, queue team]
+  - name: region
+    column: region
+    synonyms: [agent region]
+  - name: seniority
+    column: seniority
+  - name: active
+    column: active_flag
+- name: queue
+  table: dim_queue
+  description: Support queue with product area, channel, and target service level.
+  entity_type: dimension
+  synonyms: [queue, inbox, channel group]
+  primary_key: [queue_id]
+  grain: [queue_id]
+  expected_columns: [queue_id, queue_name, product_area, channel_type, priority_class, sla_hours]
+  dimensions:
+  - name: name
+    column: queue_name
+    synonyms: [queue name]
+  - name: product_area
+    column: product_area
+    synonyms: [product, area]
+  - name: channel_type
+    column: channel_type
+    synonyms: [channel, contact channel]
+  - name: priority_class
+    column: priority_class
+    synonyms: [queue priority]
+  - name: sla_hours
+    column: sla_hours
+- name: ticket
+  table: fact_ticket
+  description: Support ticket fact at one row per created ticket.
+  entity_type: fact
+  sla: PT2H
+  refresh_frequency: hourly
+  synonyms: [ticket, case, contact, issue]
+  primary_key: [ticket_id]
+  grain: [ticket_id]
+  expected_columns: [ticket_id, created_date_key, queue_id, agent_id, priority, status, first_response_minutes,
+    handle_minutes, resolution_minutes, reopened_flag, escalated_flag, satisfaction_sent_flag]
+  dimensions:
+  - name: priority
+    column: priority
+    synonyms: [ticket priority, severity]
+  - name: status
+    column: status
+    synonyms: [ticket status]
+  - name: reopened
+    column: reopened_flag
+    synonyms: [reopened ticket]
+  - name: escalated
+    column: escalated_flag
+    synonyms: [escalated ticket]
+  - name: satisfaction_sent
+    column: satisfaction_sent_flag
+- name: sla_breach
+  table: fact_ticket_sla_breach
+  description: Recorded service-level breaches; no breach has been recorded yet, so this fact
+    is intentionally empty.
+  entity_type: fact
+  synonyms: [sla breach, breach, missed target]
+  primary_key: [breach_id]
+  grain: [breach_id]
+  expected_columns: [breach_id, ticket_id, breach_date_key, breached_target_minutes, breach_minutes]
+  dimensions:
+  - name: breached_target_minutes
+    column: breached_target_minutes
+  - name: breach_minutes
+    column: breach_minutes
+- name: csat_response
+  table: fact_csat_response
+  description: Customer satisfaction survey response; free-text verbatims are withheld, the
+    escalation reason is entirely missing, and many responses never received a score.
+  entity_type: fact
+  synonyms: [csat response, survey response, satisfaction survey]
+  primary_key: [response_id]
+  grain: [response_id]
+  hidden_columns: [verbatim_comment]
+  quality_rules:
+  - rule: null_rate
+    column: escalation_reason
+    max_null_rate: 0.0
+    severity: error
+  expected_columns: [response_id, ticket_id, response_date_key, agent_id, csat_score, response_channel,
+    escalation_reason, verbatim_comment]
+  dimensions:
+  - name: response_channel
+    column: response_channel
+    synonyms: [survey channel]
+  - name: score
+    column: csat_score
+    synonyms: [csat score, satisfaction score]
+relationships:
+- name: tickets_to_date
+  from: fact_ticket.created_date_key
+  to: dim_date.date_key
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: tickets_to_queue
+  from: fact_ticket.queue_id
+  to: dim_queue.queue_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: tickets_to_agent
+  from: fact_ticket.agent_id
+  to: dim_agent.agent_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: breaches_to_ticket
+  from: fact_ticket_sla_breach.ticket_id
+  to: fact_ticket.ticket_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: breaches_to_date
+  from: fact_ticket_sla_breach.breach_date_key
+  to: dim_date.date_key
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: csat_to_ticket
+  from: fact_csat_response.ticket_id
+  to: fact_ticket.ticket_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: csat_to_agent
+  from: fact_csat_response.agent_id
+  to: dim_agent.agent_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: csat_to_date
+  from: fact_csat_response.response_date_key
+  to: dim_date.date_key
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+join_paths:
+- name: breaches_to_queue_via_ticket
+  from_entity: sla_breach
+  to_entity: queue
+  relationships: [breaches_to_ticket, tickets_to_queue]
+  description: Safe path from a breach to the queue that owned the ticket.
+- name: breaches_to_agent_via_ticket
+  from_entity: sla_breach
+  to_entity: agent
+  relationships: [breaches_to_ticket, tickets_to_agent]
+  description: Safe path from a breach to the agent that owned the ticket.
+- name: csat_to_queue_via_ticket
+  from_entity: csat_response
+  to_entity: queue
+  relationships: [csat_to_ticket, tickets_to_queue]
+  description: Safe path from a survey response to the handling queue.
+metrics:
+- name: ticket_volume
+  description: Count of distinct support tickets created.
+  entity: ticket
+  aggregation: count
+  expression: COUNT(DISTINCT fact_ticket.ticket_id)
+  synonyms: [ticket volume, tickets, contact volume, case volume]
+  allowed_dimensions: [ticket.priority, ticket.status, ticket.reopened, ticket.escalated, queue.name,
+    queue.product_area, queue.channel_type, queue.priority_class, agent.name, agent.team, agent.region,
+    agent.seniority, calendar.year, calendar.quarter, calendar.month, calendar.month_number, calendar.week_of_year]
+  time_field: fact_ticket.created_date_key
+- name: average_first_response_minutes
+  description: Mean minutes from ticket creation to the first agent response.
+  entity: ticket
+  aggregation: ratio
+  expression: CAST(SUM(fact_ticket.first_response_minutes) AS REAL) / NULLIF(COUNT(*), 0)
+  synonyms: [first response time, first reply minutes, average first response]
+  allowed_dimensions: [ticket.priority, queue.name, queue.channel_type, agent.team, agent.region,
+    agent.seniority, calendar.year, calendar.month]
+  time_field: fact_ticket.created_date_key
+- name: average_handle_minutes
+  description: Mean agent handling minutes per ticket.
+  entity: ticket
+  aggregation: ratio
+  expression: CAST(SUM(fact_ticket.handle_minutes) AS REAL) / NULLIF(COUNT(*), 0)
+  synonyms: [handle time, handling minutes]
+  allowed_dimensions: [ticket.priority, queue.name, queue.channel_type, agent.team, agent.seniority,
+    calendar.year, calendar.month]
+  time_field: fact_ticket.created_date_key
+- name: reopened_ticket_rate
+  description: Reopened tickets divided by all created tickets.
+  entity: ticket
+  aggregation: ratio
+  expression: CAST(SUM(CASE WHEN fact_ticket.reopened_flag = 1 THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*),
+    0)
+  synonyms: [reopened ticket rate, reopen rate, repeat contact rate]
+  allowed_dimensions: [ticket.priority, queue.name, queue.product_area, agent.team, agent.region,
+    calendar.year, calendar.month]
+  time_field: fact_ticket.created_date_key
+- name: escalation_rate
+  description: Escalated tickets divided by all created tickets.
+  entity: ticket
+  aggregation: ratio
+  expression: CAST(SUM(CASE WHEN fact_ticket.escalated_flag = 1 THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*),
+    0)
+  synonyms: [escalation rate, escalated share]
+  allowed_dimensions: [ticket.priority, queue.name, queue.product_area, agent.team, agent.region,
+    calendar.year, calendar.month]
+  time_field: fact_ticket.created_date_key
+- name: sla_breach_count
+  description: Count of recorded service-level breaches.
+  entity: sla_breach
+  aggregation: count
+  expression: COUNT(DISTINCT fact_ticket_sla_breach.breach_id)
+  synonyms: [sla breach count, breaches, missed service level]
+  allowed_dimensions: [sla_breach.breached_target_minutes, queue.name, queue.product_area, agent.team,
+    calendar.year, calendar.month, calendar.month_number]
+  time_field: fact_ticket_sla_breach.breach_date_key
+- name: csat_response_count
+  description: Count of distinct customer satisfaction responses.
+  entity: csat_response
+  aggregation: count
+  expression: COUNT(DISTINCT fact_csat_response.response_id)
+  synonyms: [csat response count, survey responses, responses]
+  allowed_dimensions: [csat_response.response_channel, agent.team, agent.region, calendar.year,
+    calendar.month, calendar.month_number]
+  time_field: fact_csat_response.response_date_key
+- name: average_csat_score
+  description: Mean submitted customer satisfaction score on a one-to-five scale.
+  entity: csat_response
+  aggregation: ratio
+  expression: CAST(SUM(fact_csat_response.csat_score) AS REAL) / NULLIF(COUNT(fact_csat_response.csat_score),
+    0)
+  synonyms: [average csat score, csat, customer satisfaction score, satisfaction]
+  allowed_dimensions: [csat_response.response_channel, agent.team, agent.region, calendar.year,
+    calendar.month, calendar.month_number]
+  time_field: fact_csat_response.response_date_key

@@ -3,8 +3,20 @@
 The evaluator reports exact SQL agreement separately from semantic result equivalence.
 Policy precision/recall is measured over *generated* SQL: rejection probes must be
 rejected by the real policy engine (with the case's sql_policy), and any legitimate
-query case whose generated SQL is rejected counts as a false positive. Token and
-cost values are deterministic estimates, not provider-reported billing usage.
+query case whose generated SQL is rejected counts as a false positive.
+
+Result comparison policy (declared, deterministic):
+- Row ORDER is ignored (multiset comparison); DUPLICATE rows are preserved —
+  the comparison never deduplicates with a set.
+- Column ORDER is tolerated when the column name sets match.
+- NULL compares equal to NULL only.
+- Floats: integral floats compare equal to ints; non-integral floats are
+  rounded to 10 decimal places before comparison (float-noise tolerance);
+  non-finite floats compare as the strings "Infinity"/"-Infinity"/"NaN".
+- Every run uses an ISOLATED state root (history/orchestration/vector) so
+  evaluation never pollutes production retrieval or session state.
+
+Token and cost values are deterministic estimates, not provider-reported billing usage.
 """
 
 from __future__ import annotations
@@ -17,6 +29,7 @@ import shutil
 import statistics
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +39,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from queryforge.application import AgentOptions, AgentService
+from queryforge.core.config import Config, load_config
 from queryforge.data_assets import DataAssetBuilder
 from queryforge.domain.security import SQLPolicyViolation, load_sql_policy
 from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+
+# Comparison tolerance for non-integral floats (see module docstring).
+FLOAT_COMPARISON_ROUNDING = 10
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,8 +218,32 @@ def evaluate_cases(
             / 1_000_000,
             8,
         )
+        # Identity fingerprint from the ORIGINAL case definition (not from the
+        # generated output), so uniqueness statistics are stable across runs.
+        identity = {
+            "question": case.get("question") or "",
+            "expected_sql": case.get("expected_sql") or case.get("policy_probe_sql") or "",
+        }
+        result["case_fingerprint"] = hashlib.sha256(
+            json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         results.append(result)
     return _build_report(results)
+
+
+def isolated_config(config: Config, state_root: str | Path) -> Config:
+    """Redirect every evaluator state path into an isolated root.
+
+    Evaluation must never write into production SQL history, sessions, run
+    artifacts, or the vector knowledge base.
+    """
+    root = Path(state_root).expanduser().resolve() / "isolated"
+    return replace(
+        config,
+        history_db_path=str(root / "history.db"),
+        orchestration_state_root=str(root / "runs"),
+        vector_kb_path=str(root / "lancedb"),
+    )
 
 
 def _evaluate_query(
@@ -249,9 +290,11 @@ def _evaluate_query(
                 run_id=f"evaluation_{index}",
             ),
         )
+        oracle_started = time.perf_counter()
         expected_columns, expected_rows = _execute_expected(
             database, case.get("expected_sql")
         )
+        oracle_latency_ms = round((time.perf_counter() - oracle_started) * 1000, 3)
         # Policy outcome of the *generated* SQL: rejecting a legitimate query is
         # a false positive; trusting the expected SQL would make precision
         # tautologically 1.0.
@@ -284,6 +327,7 @@ def _evaluate_query(
             "policy_expected_rejection": False,
             "row_count": output.get("row_count"),
             "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+            "oracle_latency_ms": oracle_latency_ms,
             "sql": output.get("sql"),
             "selected_index": selection.get("selected_index"),
             "candidates": candidates,
@@ -484,8 +528,13 @@ def _canonical_rows(rows: list[list[Any]]) -> list[str]:
 
 
 def _canonical_value(value: Any) -> Any:
-    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
-        return int(value)
+    """Apply the declared numeric comparison policy (see module docstring)."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return "Infinity" if value > 0 else "-Infinity" if value < 0 else "NaN"
+        if value.is_integer():
+            return int(value)
+        return round(value, FLOAT_COMPARISON_ROUNDING)
     return value
 
 
@@ -560,9 +609,13 @@ def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
             ),
         }
     unique_queries = {
-        (str(item.get("question")), str(item.get("sql") or item.get("policy_probe_sql") or ""))
-        for item in results
+        str(item.get("case_fingerprint")) for item in results
     }
+    oracle_latencies = [
+        float(item["oracle_latency_ms"])
+        for item in query_results
+        if item.get("oracle_latency_ms") is not None
+    ]
     return {
         "case_count": len(results),
         "query_count": len(query_results),
@@ -607,6 +660,10 @@ def _build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
             "latency_warmup_excluded_case": (
                 query_results[0].get("id") if query_results else None
             ),
+            "average_service_latency_ms": _average(
+                [float(item["latency_ms"]) for item in query_results]
+            ),
+            "average_oracle_latency_ms": _average(oracle_latencies),
             "average_estimated_input_tokens": _average(
                 [int(item["estimated_input_tokens"]) for item in results]
             ),
@@ -644,9 +701,16 @@ def _project_path(value: str | Path) -> Path:
 def main() -> int:
     args = parse_args()
     cases = load_cases(_project_path(args.cases), args.limit)
+    # Isolated state: evaluation never writes production history, sessions,
+    # run artifacts, or the vector knowledge base.
+    base_config = load_config(
+        provider_override=args.model_provider,
+        model_override=args.model,
+    )
+    evaluation_config = isolated_config(base_config, args.asset_state_root)
     report = evaluate_cases(
         cases,
-        service=AgentService(),
+        service=AgentService(config_loader=lambda **_: evaluation_config),
         environment=EvaluationEnvironment(args.asset_state_root),
         default_database=args.database,
         default_semantic_model=args.semantic_model,
@@ -656,6 +720,12 @@ def main() -> int:
         input_cost_per_million=args.input_cost_per_million,
         output_cost_per_million=args.output_cost_per_million,
     )
+    report["state_isolation"] = {
+        "mode": "isolated",
+        "history_db_path": evaluation_config.history_db_path,
+        "orchestration_state_root": evaluation_config.orchestration_state_root,
+        "vector_kb_path": evaluation_config.vector_kb_path,
+    }
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report["metrics"], ensure_ascii=False, indent=2))
     failures = _gate_failures(report, args)

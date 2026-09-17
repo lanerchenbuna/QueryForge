@@ -21,6 +21,7 @@ from queryforge.infrastructure.storage import (
     SQLHistoryStore,
 )
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+from queryforge.domain.security import load_sql_policy
 from queryforge.domain.semantic.builder import SemanticBuildError, SemanticModelBuilder
 
 
@@ -91,6 +92,139 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--parallel-max-preview", type=int, default=2)
     parser.add_argument("--parallel-preview-limit", type=int, default=20)
     parser.add_argument("--parallel-preview-timeout", type=float, default=10)
+    parser.add_argument(
+        "--analyze",
+        action="store_true",
+        help="Run the planned multi-step analysis entry point instead of the single-query workflow",
+    )
+    parser.add_argument(
+        "--analyze-max-replans",
+        type=int,
+        default=2,
+        help="Maximum bounded replans for --analyze (default: 2)",
+    )
+    parser.add_argument(
+        "--analyze-max-tool-calls",
+        type=int,
+        default=None,
+        help="Tool-call budget for --analyze (default: planner default)",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Persist --analyze under this durable run id so it can be resumed "
+            "after a crash (see --resume / --run-status)"
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "With --run-id: resume a crashed run, reusing the steps whose inputs "
+            "are unchanged instead of running the whole plan again"
+        ),
+    )
+    parser.add_argument(
+        "--run-status",
+        default=None,
+        metavar="RUN_ID",
+        help="Print the durable status of a persisted run and exit",
+    )
+    # Conversation-memory governance (stage 13): retention, deletion, export,
+    # preference scope and definition-version invalidation. These were implemented
+    # in SessionStore but had no operator surface at all (M7).
+    parser.add_argument(
+        "--sessions",
+        action="store_true",
+        help="List stored conversation session IDs and exit",
+    )
+    parser.add_argument(
+        "--session-status",
+        default=None,
+        metavar="SESSION_ID",
+        help="Print one session's retention/preference/invalidation status and exit",
+    )
+    parser.add_argument(
+        "--session-export",
+        default=None,
+        metavar="SESSION_ID",
+        help="Export one session as JSON (result rows are never stored) and exit",
+    )
+    parser.add_argument(
+        "--session-delete",
+        default=None,
+        metavar="SESSION_ID",
+        help="Delete one session (or the range given by --session-turn-range) and exit",
+    )
+    parser.add_argument(
+        "--session-turn-range",
+        default=None,
+        metavar="START-END",
+        help="Inclusive turn range (1-based) deleted by --session-delete",
+    )
+    parser.add_argument(
+        "--session-expire",
+        action="store_true",
+        help=(
+            "Drop turns outside the retention window; limit it to one session with "
+            "--session-id, or set an explicit cutoff with --session-expire-before"
+        ),
+    )
+    parser.add_argument(
+        "--session-expire-before",
+        default=None,
+        metavar="ISO_TIMESTAMP",
+        help="Explicit expiry cutoff used by --session-expire",
+    )
+    parser.add_argument(
+        "--session-revoke-preference",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Revoke one preference from --session-id it must belong to --user-id"
+        ),
+    )
+    parser.add_argument(
+        "--user-id",
+        default=None,
+        metavar="USER_ID",
+        help="Preference owner required by --session-revoke-preference",
+    )
+    parser.add_argument(
+        "--session-set-preference",
+        nargs=2,
+        default=None,
+        metavar=("NAME", "VALUE"),
+        help=(
+            "Store a user-scoped preference on --session-id for --user-id and exit"
+        ),
+    )
+    parser.add_argument(
+        "--invalidate-knowledge-version",
+        default=None,
+        metavar="VERSION_REF",
+        help=(
+            "Mark the turns that recorded a superseded definition version "
+            "(metric/model id, version, or kind:id@version); all sessions unless "
+            "--session-id is given"
+        ),
+    )
+    parser.add_argument(
+        "--invalidate-reason",
+        default=None,
+        metavar="REASON",
+        help="Audit reason recorded by --invalidate-knowledge-version",
+    )
+    parser.add_argument(
+        "--force-resume",
+        action="store_true",
+        help=(
+            "With --run-id: resume even when the run ended, or when a "
+            "side-effecting step has an unknown outcome — use only after verifying "
+            "the external state"
+        ),
+    )
     parser.add_argument(
         "--complexity-mode",
         choices=("auto", "simple", "complex"),
@@ -505,18 +639,37 @@ def main() -> int:
                 database_path = args.database or kb_config.database_path
                 if not Path(database_path).expanduser().is_file():
                     raise ValueError(f"SQLite database does not exist: {database_path}")
+                # The retrieval index has to be built from the *governed* schema:
+                # without a policy the tool describes every withheld column (PII
+                # such as ``dim_user.email``) and those descriptions are exactly
+                # what a later question retrieves. The policy is therefore loaded
+                # the same way the query paths load it (H5).
+                policy, policy_source = load_sql_policy(
+                    args.sql_policy or kb_config.sql_policy_path
+                )
                 with SQLiteConnector(database_path) as connector:
-                    database_tool = DatabaseTool(connector)
+                    database_tool = DatabaseTool(
+                        connector, policy, policy_source_path=policy_source
+                    )
                     schemas = [
                         database_tool.describe_table(table)
                         for table in database_tool.list_tables()
                     ]
                 history_store = SQLHistoryStore(kb_config.history_db_path)
-                result["rebuild"] = KnowledgeBaseBuilder(vector_store).rebuild(
+                # The manifest is what makes stale-source cleanup durable: with
+                # an in-memory manifest only, a rebuild in a new process cannot
+                # know which documents it manages, so removed sources leave
+                # orphaned documents behind forever (step 13, 13-C1).
+                manifest_path = Path(kb_config.vector_kb_path).expanduser() / "managed_documents.json"
+                builder = KnowledgeBaseBuilder(
+                    vector_store, manifest_path=manifest_path
+                )
+                result["rebuild"] = builder.rebuild(
                     history_store=history_store,
                     schemas=schemas,
                     sources=args.kb_source,
                 )
+                result["manifest_path"] = str(manifest_path)
                 result["sources"] = [str(Path(path).expanduser()) for path in args.kb_source]
             if args.kb_stats:
                 result["stats"] = vector_store.stats()
@@ -574,6 +727,110 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
+    if args.run_status:
+        # A durable status query is a standalone read: no question, database, or
+        # model path is required (they are read back from the persisted run).
+        try:
+            from queryforge.application.analysis_planner import AnalysisPlannerService
+
+            status = AnalysisPlannerService().run_status(args.run_status)
+        except Exception as exc:  # CLI boundary: keep user-facing errors concise.
+            print(f"QueryForge failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(status.model_dump(mode="json"), ensure_ascii=False, indent=2))
+        return 0
+
+    session_action = any(
+        (
+            args.sessions,
+            args.session_status,
+            args.session_export,
+            args.session_delete,
+            args.session_expire,
+            args.session_revoke_preference,
+            args.session_set_preference,
+            args.invalidate_knowledge_version,
+            # Companion flags count too, so a stray one is reported as the usage
+            # error it is instead of silently falling through to the question path.
+            args.session_turn_range,
+            args.session_expire_before,
+            args.invalidate_reason,
+        )
+    )
+    if session_action:
+        # Standalone memory-governance operations: each one reads the same session
+        # files the runs write, so no question or database is required.
+        usage_errors = []
+        if args.session_turn_range and not args.session_delete:
+            usage_errors.append("--session-turn-range requires --session-delete")
+        if args.session_expire_before and not args.session_expire:
+            usage_errors.append("--session-expire-before requires --session-expire")
+        if args.session_revoke_preference and not args.session_id:
+            usage_errors.append(
+                "--session-revoke-preference requires --session-id"
+            )
+        if args.session_revoke_preference and not args.user_id:
+            usage_errors.append("--session-revoke-preference requires --user-id")
+        if args.session_set_preference and not args.session_id:
+            usage_errors.append("--session-set-preference requires --session-id")
+        if args.session_set_preference and not args.user_id:
+            usage_errors.append("--session-set-preference requires --user-id")
+        if args.invalidate_reason and not args.invalidate_knowledge_version:
+            usage_errors.append(
+                "--invalidate-reason requires --invalidate-knowledge-version"
+            )
+        if usage_errors:
+            for message in usage_errors:
+                print(f"QueryForge failed: {message}", file=sys.stderr)
+            return 2
+        try:
+            session_service = AgentService(config_loader=load_config)
+            session_result: dict[str, object] = {}
+            if args.sessions:
+                session_result = session_service.list_sessions()
+            if args.session_status:
+                session_result = session_service.session_status(args.session_status)
+            if args.session_export:
+                session_result = session_service.export_session(args.session_export)
+            if args.session_delete:
+                session_result = session_service.delete_session(
+                    args.session_delete,
+                    turn_range=_parse_turn_range(args.session_turn_range),
+                )
+            if args.session_expire:
+                session_result = session_service.expire_sessions(
+                    session_id=args.session_id,
+                    before=args.session_expire_before,
+                )
+            if args.session_set_preference:
+                name, value = args.session_set_preference
+                session_result = session_service.set_session_preference(
+                    args.session_id,
+                    user_id=args.user_id,
+                    name=name,
+                    value=value,
+                )
+            if args.session_revoke_preference:
+                session_result = session_service.revoke_session_preference(
+                    args.session_id,
+                    args.session_revoke_preference,
+                    user_id=args.user_id,
+                )
+            if args.invalidate_knowledge_version:
+                session_result = session_service.invalidate_session_knowledge_version(
+                    args.invalidate_knowledge_version,
+                    session_id=args.session_id,
+                    reason=args.invalidate_reason,
+                )
+        except Exception as exc:  # CLI boundary: keep user-facing errors concise.
+            print(
+                f"QueryForge failed: session operation failed: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps(session_result, ensure_ascii=False, indent=2))
+        return 0
+
     if not args.question:
         print("QueryForge failed: --question is required", file=sys.stderr)
         return 2
@@ -614,6 +871,39 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.analyze:
+        if args.analyze_max_replans < 0:
+            print(
+                "QueryForge failed: --analyze-max-replans must be zero or greater",
+                file=sys.stderr,
+            )
+            return 2
+        if args.resume and not args.run_id:
+            print("QueryForge failed: --resume requires --run-id", file=sys.stderr)
+            return 2
+        limits: dict[str, float] = {}
+        if args.analyze_max_tool_calls is not None:
+            limits["max_tool_calls"] = args.analyze_max_tool_calls
+        try:
+            from queryforge.application.analysis_planner import AnalysisPlannerService
+
+            output = AnalysisPlannerService().analyze(
+                args.question,
+                database=args.database,
+                semantic_model_path=args.semantic_model,
+                sql_policy_path=args.sql_policy,
+                limits=limits or None,
+                max_replans=args.analyze_max_replans,
+                run_id=args.run_id,
+                resume=bool(args.resume),
+                force_resume=bool(args.force_resume),
+            )
+        except Exception as exc:  # CLI boundary: keep user-facing errors concise.
+            print(f"QueryForge failed: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
 
     try:
         selected_skills = _parse_skill_names(args.skills)
@@ -714,6 +1004,26 @@ def _format_stream_event(event) -> str:
     target = event.node_name or event.phase_name or event.artifact_type or "workflow"
     message = event.message or event.event_type
     return f"[{event.event_type}] {target}: {message}"
+
+
+def _parse_turn_range(value: str | None) -> tuple[int, int] | None:
+    """Parse ``START-END`` (or ``START:END``) into an inclusive turn range.
+
+    Turn numbers are 1-based; the range is only ever used to delete turns inside a
+    single session, so a malformed value is a usage error, never a silent no-op.
+    """
+
+    if value is None:
+        return None
+    parts = value.replace(":", "-").split("-")
+    if len(parts) != 2 or not all(part.strip().isdigit() for part in parts):
+        raise ValueError("--session-turn-range must be START-END, for example 2-4")
+    start, end = (int(part.strip()) for part in parts)
+    if start < 1 or end < start:
+        raise ValueError(
+            "--session-turn-range must be an increasing 1-based range, for example 2-4"
+        )
+    return start, end
 
 
 def _interactive_plan_approver(plan: ExecutionPlan) -> bool:

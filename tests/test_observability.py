@@ -6,16 +6,22 @@ import unittest
 from pathlib import Path
 
 from main import build_parser
+from queryforge.application.agent_service import run_observability_summary
 from queryforge.workflow.node.base import Node
 from queryforge.workflow.workflow import Workflow, WorkflowError
 from queryforge.workflow.workflow_runner import WorkflowRunner
 from queryforge.core.config import Config
 from queryforge.core.observability import (
+    MAX_TRACKED_RUNS,
+    ModelUsage,
     ObservedModelProvider,
     configure_logging,
+    discard_span_recorder,
+    get_span_recorder,
     new_run_id,
     node_logging_context,
     run_logging_context,
+    start_span_recorder,
 )
 from queryforge.core.schemas.models import Context, SqlTask
 
@@ -176,6 +182,56 @@ class ObservabilityTest(unittest.TestCase):
         second = new_run_id()
         self.assertRegex(first, r"^qf_[0-9a-f]{32}$")
         self.assertNotEqual(first, second)
+
+    def test_a_live_run_keeps_its_recorder_when_the_registry_is_full(self):
+        """Regression: at the cap the registry evicted the oldest *open* run.
+
+        That run then had no recorder, so ``get_span_recorder`` returned ``None``
+        and its terminal observability summary disappeared even though the run
+        was still collecting spans.
+        """
+
+        run_ids = [
+            f"qf_observability_cap_{index:02d}" for index in range(MAX_TRACKED_RUNS + 1)
+        ]
+        for run_id in run_ids:
+            self.addCleanup(discard_span_recorder, run_id)
+            start_span_recorder(run_id)
+        self.assertIsNotNone(get_span_recorder(run_ids[0]))
+        self.assertIsNotNone(run_observability_summary(None, run_ids[0]))
+
+        # The cap still bounds finished runs: a closed recorder is evicted first.
+        probe_id = "qf_observability_cap_probe"
+        self.addCleanup(discard_span_recorder, probe_id)
+        closed = get_span_recorder(run_ids[1])
+        self.assertIsNotNone(closed)
+        closed.close()
+        self.assertIsNotNone(get_span_recorder(run_ids[1]))
+        start_span_recorder(probe_id)
+        self.assertIsNone(get_span_recorder(run_ids[1]))
+        self.assertIsNotNone(get_span_recorder(run_ids[0]))
+
+    def test_ending_one_span_twice_records_it_once(self):
+        """Regression: a second ``end`` recorded the span again, so its duration
+        and tokens were counted twice in the run summary."""
+
+        run_id = "qf_observability_end_twice"
+        self.addCleanup(discard_span_recorder, run_id)
+        recorder = start_span_recorder(run_id)
+        span = recorder.begin("model.generate_json", "model")
+        span.usage = ModelUsage(
+            prompt_tokens=3, completion_tokens=2, total_tokens=5, estimated=False
+        )
+        recorder.end(span)
+        recorder.end(span)
+        self.assertEqual(len(recorder.spans), 1)
+        summary = recorder.usage_summary()
+        self.assertEqual(summary["model_calls"], 1)
+        self.assertEqual(summary["total_tokens"], 5)
+        # An explicit status on the repeat still applies; the record does not.
+        recorder.end(span, status="failed")
+        self.assertEqual(span.status, "failed")
+        self.assertEqual(len(recorder.spans), 1)
 
 
 if __name__ == "__main__":

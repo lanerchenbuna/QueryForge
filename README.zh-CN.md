@@ -14,7 +14,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-只读执行-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20治理-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-270%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-691%20passing-2EA44F)
 ![Semantic contracts](https://img.shields.io/badge/semantic%20checks-82%20passing-7C3AED)
 
 </div>
@@ -408,6 +408,27 @@ python scripts/evaluate_sql.py \
 ```
 
 CI 会在 Python 3.11 和 3.12 上执行离线验收。
+
+## 已验证的能力（以及未验证的部分）
+
+本节每条声明都能从仓库复现；对应验收记录里同时写着通过与缺口。
+
+| 能力 | 怎么验证 | 状态 |
+| --- | --- | --- |
+| 完整离线测试套件 | `make test` —— **806 个测试，0 skip** | 已验证 |
+| 仓库 + 集成门禁 | `make check`（`scripts/run_acceptance.py --full`，13/13 项通过） | 已验证 |
+| 端到端 Demo（上传→发布→查询；语义校验抓错；多步分析；跨传输/拒绝/恢复） | `make demo` —— `docs/demo/` 下四个带断言的叙事脚本 | 已验证 |
+| 确定性 Agent Benchmark（32 个金标任务、3 个独立 schema、消融、效果门禁） | `python scripts/benchmark_agent.py --tier 1 --gate` | 已验证（32/32） |
+| 可选依赖集成层 | `python scripts/benchmark_agent.py --tier 2 --gate` —— 依赖缺失**判定失败**而非跳过 | 已装 `.[api,mcp]` 后通过 |
+| 真实模型 NL2SQL 评测 | `python scripts/evaluate_sql.py --cases evaluation/gold/nl2sql_multidomain.jsonl --model-provider <p> --model <m>` | **本机未跑**——没有数字，因此不声称准确率 |
+
+Demo 全部离线、确定性（无模型调用、无网络、无需 API key）。Agent Benchmark 的 tier 1 由金标提供 SQL，
+所以 32/32 衡量的是**工程链路**（治理、执行、证据、预算、失败分类），**不是模型准确率**。
+真实模型数字必须来自带凭证的 tier 3 运行，并单独报告（`.github/workflows/model-eval.yml`）。
+
+部署等级：**受控环境、单租户、只读数据访问**。默认后端为 SQLite，另有可选的 DuckDB 适配器
+（见 [数据库适配器](docs/database_adapters.md)）。系统未针对任意不可信的多租户输入做加固，
+逐条记在上方对应能力的文档中；两处诚实的空白是：真实模型评测（无准确率数字）与 PostgreSQL 后端（已实现、未在真实服务器上验证）。
 
 ## 项目文档
 

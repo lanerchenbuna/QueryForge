@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from .adapters import AdapterCapabilities
 
 from queryforge.core.schemas.models import (
     ExecutionResult,
@@ -20,6 +21,9 @@ class SQLiteConnectorError(RuntimeError):
 class SQLiteConnector:
     """Open one existing SQLite database with read-only enforcement."""
 
+    dialect = "sqlite"
+    capabilities = AdapterCapabilities("sqlite")
+
     def __init__(self, database_path: str) -> None:
         self.database_path = Path(database_path).expanduser().resolve()
         if not self.database_path.is_file():
@@ -29,7 +33,9 @@ class SQLiteConnector:
 
         try:
             uri = f"{self.database_path.as_uri()}?mode=ro"
-            self._connection = sqlite3.connect(uri, uri=True)
+            # Each worker owns one connection; cross-thread close/cancel is safe
+            # after execution joins, and prevents leaking planner connections.
+            self._connection = sqlite3.connect(uri, uri=True, check_same_thread=False)
             self._connection.execute("PRAGMA query_only = ON")
         except sqlite3.Error as exc:
             raise SQLiteConnectorError(
@@ -152,6 +158,14 @@ class SQLiteConnector:
 
     def close(self) -> None:
         self._connection.close()
+
+    def cancel(self) -> None:
+        self._connection.interrupt()
+
+    def explain(self, sql: str) -> ExecutionResult:
+        from queryforge.infrastructure.tools.database_tool import DatabaseTool
+        DatabaseTool(self).policy_engine.evaluate(sql)
+        return self.execute_sql("EXPLAIN QUERY PLAN " + sql)
 
     def __enter__(self) -> "SQLiteConnector":
         return self

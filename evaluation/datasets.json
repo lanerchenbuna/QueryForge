@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "datasets": [
+    {
+      "dataset_id": "anime_streaming",
+      "database": "sample_data/anime_streaming/anime_streaming.sqlite",
+      "semantic_model": "sample_data/anime_streaming/semantic_model.yml",
+      "sql_policy": "sample_data/anime_streaming/sql_policy.yml",
+      "split_scope": "dev"
+    },
+    {
+      "dataset_id": "retail_orders",
+      "database": "sample_data/retail_orders/retail_orders.sqlite",
+      "semantic_model": "sample_data/retail_orders/semantic_model.yml",
+      "sql_policy": "sample_data/retail_orders/sql_policy.yml",
+      "split_scope": "regression"
+    },
+    {
+      "dataset_id": "support_tickets",
+      "database": "sample_data/support_tickets/support_tickets.sqlite",
+      "semantic_model": "sample_data/support_tickets/semantic_model.yml",
+      "sql_policy": "sample_data/support_tickets/sql_policy.yml",
+      "split_scope": "holdout"
+    }
+  ]
+}

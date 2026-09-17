@@ -5,8 +5,10 @@ from __future__ import annotations
 from datetime import date
 import json
 import logging
+import threading
 import time
-from typing import Callable
+from contextlib import ExitStack, contextmanager
+from typing import Any, Callable
 
 from queryforge.workflow.node.date_parser_node import DateParserNode
 from queryforge.workflow.node.execute_sql_node import ExecuteSqlNode
@@ -28,16 +30,25 @@ from queryforge.workflow.node.subject_selection_node import SubjectSelectionNode
 from queryforge.workflow.node.tool_loop_node import ToolLoopNode
 from queryforge.workflow.node.visualization_node import VisualizationNode
 from queryforge.workflow.event_emitter import EventEmitter
-from queryforge.workflow.workflow import ReflectiveWorkflow, WorkflowError
+from queryforge.workflow.workflow import (
+    ReflectiveWorkflow,
+    WorkflowCancelled,
+    WorkflowError,
+)
 from queryforge.core.config import Config
-from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
+from queryforge.infrastructure.db.adapters import open_database as SQLiteConnector
 from queryforge.infrastructure.models.base import BaseModelProvider
 from queryforge.infrastructure.models.factory import ModelFactory
 from queryforge.core.observability import (
     ObservedModelProvider,
+    Span,
+    SpanRecorder,
     ensure_logging_configured,
+    get_span_recorder,
     new_run_id,
     run_logging_context,
+    stable_digest,
+    start_span_recorder,
 )
 from queryforge.core.schemas.models import Context, SQLContext, SqlTask, VectorMatch
 from queryforge.domain.security import load_sql_policy
@@ -49,11 +60,185 @@ from queryforge.infrastructure.storage import (
     SQL_SOURCE_TYPES,
     VectorStore,
 )
+from queryforge.orchestration.tools import BudgetManager
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 from queryforge.infrastructure.tools.reference_sql_tool import ReferenceSqlTool
 
 
 LOGGER = logging.getLogger("queryforge.runner")
+
+
+def sqlite_connection(connector: object) -> object | None:
+    """Return the raw sqlite3 connection behind a connector, if reachable."""
+
+    for attribute in ("connection", "_connection"):
+        connection = getattr(connector, attribute, None)
+        if connection is not None and hasattr(connection, "interrupt"):
+            return connection
+    return None
+
+
+def install_cancellation_handler(
+    connector: object, cancel_check: Callable[[], bool] | None
+) -> Callable[[], None]:
+    """Interrupt in-flight SQLite work as soon as cancellation is requested.
+
+    Step 09 established that a SQLite progress handler can abort a running
+    statement (see ``orchestration/tools/budget.py::install_sql_deadline_handler``);
+    cancellation reuses exactly that mechanism with the cancel flag as the
+    trigger instead of a wall-clock deadline, so a client disconnect reaches the
+    SQL boundary instead of waiting for the statement to finish.
+
+    A connection has a single progress-handler slot, which other components
+    legitimately reuse (the step 09 budget deadline, the step 11 quality tool).
+    A lightweight watcher thread therefore also calls ``Connection.interrupt()``,
+    so cancellation still lands when another component has replaced the handler.
+    Returns a ``stop`` callable. Non-SQLite databases and in-flight model calls
+    keep their documented "cannot be interrupted" limitation.
+    """
+
+    connection = sqlite_connection(connector)
+    if connection is None or cancel_check is None:
+        return lambda: None
+    setter = getattr(connection, "set_progress_handler", None)
+    installed = False
+    if setter is not None:
+
+        def handler() -> int:
+            return 1 if cancel_check() else 0
+
+        try:  # pragma: no cover - depends on the sqlite3 build
+            setter(handler, 1000)
+            installed = True
+        except Exception:  # pragma: no cover - defensive
+            installed = False
+
+    stop_event = threading.Event()
+
+    def watch() -> None:
+        while not stop_event.wait(0.02):
+            if cancel_check():
+                try:
+                    connection.interrupt()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                return
+
+    watcher = threading.Thread(
+        target=watch, name="queryforge-cancel-watch", daemon=True
+    )
+    watcher.start()
+
+    def stop() -> None:
+        stop_event.set()
+        watcher.join(timeout=1.0)
+        if installed:
+            try:
+                setter(None, 0)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    return stop
+
+
+class ObservedConnector:
+    """Duck-typed connector proxy that records ``sql`` and ``tool`` spans.
+
+    The SQL text is never stored: spans keep a character count and a short
+    digest so a trace can be correlated with logs without copying query text
+    (which may embed literals) into the observability store.
+    """
+
+    def __init__(self, connector: object, run_id: str, recorder: SpanRecorder | None) -> None:
+        self._connector = connector
+        self._run_id = run_id
+        self._recorder = recorder
+
+    def __getattr__(self, name):
+        return getattr(self._connector, name)
+
+    def _span(self, name: str, kind: str, attributes: dict | None = None) -> Span | None:
+        recorder = self._recorder or get_span_recorder(self._run_id)
+        if recorder is None:
+            return None
+        return recorder.begin(name, kind, attributes=attributes)
+
+    def _end(self, span: Span | None, *, status: str, **attributes: object) -> None:
+        if span is None:
+            return
+        recorder = self._recorder or get_span_recorder(self._run_id)
+        if recorder is None:
+            return
+        span.attributes.update(
+            {key: value for key, value in attributes.items() if value is not None}
+        )
+        recorder.end(span, status=status)
+
+    def execute_sql(self, sql: str):
+        statement = sql if isinstance(sql, str) else str(sql)
+        span = self._span(
+            "sql.execute",
+            "sql",
+            {
+                "statement_chars": len(statement),
+                "statement_digest": stable_digest(statement),
+                "database": getattr(self._connector, "database_path", None)
+                and str(getattr(self._connector, "database_path")),
+            },
+        )
+        try:
+            result = self._connector.execute_sql(sql)
+        except BaseException as exc:
+            self._end(span, status="failed", error_type=type(exc).__name__)
+            raise
+        self._end(
+            span,
+            status="success",
+            row_count=getattr(result, "row_count", None),
+            column_count=len(getattr(result, "columns", []) or []),
+        )
+        return result
+
+    def list_tables(self):
+        return self._observe_tool("list_tables", self._connector.list_tables)
+
+    def describe_table(self, table_name: str):
+        return self._observe_tool(
+            "describe_table", self._connector.describe_table, table_name
+        )
+
+    def find_matching_values(self, *args, **kwargs):
+        return self._observe_tool(
+            "find_matching_values",
+            self._connector.find_matching_values,
+            *args,
+            **kwargs,
+        )
+
+    def _observe_tool(self, name: str, operation: Callable, *args, **kwargs):
+        span = self._span(f"tool.{name}", "tool", {"tool": name})
+        try:
+            result = operation(*args, **kwargs)
+        except BaseException as exc:
+            self._end(span, status="failed", error_type=type(exc).__name__)
+            raise
+        self._end(
+            span,
+            status="success",
+            item_count=len(result) if hasattr(result, "__len__") else None,
+        )
+        return result
+
+    def __getattr__(self, name: str):
+        return getattr(self._connector, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        close = getattr(self._connector, "close", None)
+        if callable(close):
+            close()
 
 
 class WorkflowRunner:
@@ -125,6 +310,8 @@ class WorkflowRunner:
         tool_loop_max_rounds: int = 5,
         tool_loop_timeout_seconds: float = 30,
         tool_loop_preview_limit: int = 20,
+        tool_budget_manager: BudgetManager | None = None,
+        tool_budget_limits: dict[str, float] | None = None,
         parallel_candidates: int = 1,
         parallel_max_preview: int = 2,
         parallel_preview_limit: int = 20,
@@ -136,6 +323,9 @@ class WorkflowRunner:
         report_max_rows: int | None = None,
         report_max_charts: int | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        history_domain_id: str | None = None,
+        history_data_version: str | None = None,
+        retrieval_scope: dict[str, Any] | None = None,
     ) -> None:
         self.config = config
         self.llm_factory = llm_factory
@@ -180,6 +370,9 @@ class WorkflowRunner:
         self.tool_loop_max_rounds = tool_loop_max_rounds
         self.tool_loop_timeout_seconds = tool_loop_timeout_seconds
         self.tool_loop_preview_limit = tool_loop_preview_limit
+        # Step 09: the tool loop shares one atomic budget per run.
+        self.tool_budget_manager = tool_budget_manager
+        self.tool_budget_limits = dict(tool_budget_limits or {})
         if parallel_candidates < 1 or parallel_candidates > 3:
             raise ValueError("parallel_candidates must be between 1 and 3")
         self.parallel_candidates = parallel_candidates
@@ -193,6 +386,11 @@ class WorkflowRunner:
         self.report_max_rows = report_max_rows or config.report_max_rows
         self.report_max_charts = report_max_charts or config.report_max_charts
         self.cancel_check = cancel_check
+        # Data-domain identity of this run, stamped onto persisted history and
+        # vector documents so scoped storage can be filtered by domain.
+        self.history_domain_id = history_domain_id
+        self.history_data_version = history_data_version
+        self.retrieval_scope = dict(retrieval_scope or {})
 
     @classmethod
     def describe_workflow(cls) -> str:
@@ -214,6 +412,9 @@ class WorkflowRunner:
         ensure_logging_configured()
         run_id = self.run_id_factory()
         started = time.perf_counter()
+        # One span recorder per run: model, tool, sql, retrieval and step spans
+        # all aggregate into the same run-level usage/latency summary.
+        recorder = start_span_recorder(run_id)
         with run_logging_context(run_id):
             LOGGER.info(
                 "run_start question=%s provider=%s model=%s",
@@ -223,6 +424,15 @@ class WorkflowRunner:
             )
             try:
                 output, context = self._run_inner(task, run_id)
+            except WorkflowCancelled:
+                # A cancelled run is not a failed run: no failure summary, no
+                # ``failed`` status anywhere, and the run is never retried.
+                duration_ms = round((time.perf_counter() - started) * 1000, 3)
+                LOGGER.warning(
+                    "run_cancelled run_id=%s duration_ms=%s", run_id, duration_ms
+                )
+                recorder.close()
+                raise
             except Exception as exc:
                 context = getattr(exc, "context", None)
                 duration_ms = round((time.perf_counter() - started) * 1000, 3)
@@ -233,8 +443,10 @@ class WorkflowRunner:
                     duration_ms=duration_ms,
                     error=str(exc),
                     run_id=run_id,
+                    recorder=recorder,
                 )
                 LOGGER.error("run_summary %s", json.dumps(summary, ensure_ascii=False))
+                recorder.close()
                 raise
             duration_ms = round((time.perf_counter() - started) * 1000, 3)
             summary = self._build_summary(
@@ -243,21 +455,26 @@ class WorkflowRunner:
                 status=str(output.get("status") or "success"),
                 duration_ms=duration_ms,
                 run_id=run_id,
+                recorder=recorder,
             )
             LOGGER.info("run_summary %s", json.dumps(summary, ensure_ascii=False))
+            recorder.close()
             if self.show_run_summary:
                 output["run_summary"] = summary
             return output
 
     def _run_inner(self, task: SqlTask, run_id: str) -> tuple[dict, Context]:
+        recorder = get_span_recorder(run_id)
+        with self._retrieval_span(recorder, "reference_examples", question=task.question):
+            reference_examples = ReferenceSqlTool(task.database_path).find_similar(
+                task.question
+            )
         context = Context(
             task=task,
             run_id=run_id,
             selected_provider=self.config.llm_provider,
             selected_model=self.config.llm_model,
-            reference_examples=ReferenceSqlTool(task.database_path).find_similar(
-                task.question
-            ),
+            reference_examples=reference_examples,
             vector_kb_enabled=self.enable_vector_kb,
             vector_kb_status="active" if self.enable_vector_kb else "disabled",
             vector_write_status="not_attempted" if self.enable_vector_kb else "disabled",
@@ -267,20 +484,36 @@ class WorkflowRunner:
             report_max_rows=self.report_max_rows,
             report_max_charts=self.report_max_charts,
         )
+        # Publish the retrieval scope so governed retrieval is filtered in the
+        # *production* path and not only when a caller sets a node kwarg: an
+        # unset scope means "no domain filter", which would let another domain's
+        # definitions compete for the context window (step 13, 13-I1).
+        retrieval_scope = self._retrieval_scope()
+        if retrieval_scope:
+            context.task_context["retrieval_scope"] = retrieval_scope
         if self.initial_sql:
             context.sql_context = SQLContext(
                 sql=self.initial_sql,
                 explanation="User-provided SQL used as the initial troubleshooting candidate.",
                 tables_used=[],
             )
-        with SQLiteConnector(task.database_path) as connector:
+        connector = SQLiteConnector(task.database_path)
+        with ExitStack() as connector_scope, connector:
+            # Cancellation reaches the SQL boundary: an in-flight statement is
+            # interrupted as soon as the streaming client disconnects, and the
+            # watcher/progress handler is stopped when the run leaves this scope.
+            connector_scope.callback(
+                install_cancellation_handler(connector, self.cancel_check)
+            )
+            observed_connector = ObservedConnector(connector, run_id, recorder)
             sql_policy, policy_source_path = load_sql_policy(self.sql_policy_path)
             database_tool = DatabaseTool(
-                connector,
+                observed_connector,
                 sql_policy,
                 policy_source_path=policy_source_path,
             )
             context.sql_policy = database_tool.policy_summary
+            context.task_context["sql_dialect"] = database_tool.dialect
             raw_llm = self.llm_factory(self.config)
             llm = ObservedModelProvider(
                 raw_llm,
@@ -307,14 +540,22 @@ class WorkflowRunner:
                     LOGGER.warning("vector_kb_initialization_failed error=%s", exc)
             if vector_store is not None and self.vector_top_k > 0:
                 try:
-                    context.vector_sql_matches = [
-                        VectorMatch.model_validate(match.to_dict())
-                        for match in vector_store.search(
-                            task.question,
-                            top_k=self.vector_top_k,
-                            source_types=SQL_SOURCE_TYPES,
+                    with self._retrieval_span(
+                        recorder, "vector_sql", top_k=self.vector_top_k
+                    ) as span:
+                        matches = list(
+                            vector_store.search(
+                                task.question,
+                                top_k=self.vector_top_k,
+                                source_types=SQL_SOURCE_TYPES,
+                            )
                         )
-                    ]
+                        if span is not None:
+                            span.attributes["match_count"] = len(matches)
+                        context.vector_sql_matches = [
+                            VectorMatch.model_validate(match.to_dict())
+                            for match in matches
+                        ]
                 except Exception as exc:
                     context.vector_kb_status = "degraded"
                     context.vector_kb_error = str(exc)
@@ -329,9 +570,27 @@ class WorkflowRunner:
                     LOGGER.warning("history_initialization_failed error=%s", exc)
             if history_store is not None and self.history_top_k > 0:
                 try:
-                    context.history_matches = history_store.search(
-                        task.question, top_k=self.history_top_k
-                    )
+                    with self._retrieval_span(
+                        recorder, "sql_history", top_k=self.history_top_k
+                    ) as span:
+                        # History rows are written with the run's domain/data
+                        # version, so the reader must query with the *same*
+                        # resolved scope: an unscoped search injected another
+                        # domain's SQL verbatim into the generation prompt.
+                        # ``trusted_only`` keeps prompt-injected few-shot
+                        # examples to human-reviewed rows, because a successful
+                        # execution does not prove business correctness.
+                        search = history_store.search_with_evidence(
+                            task.question,
+                            top_k=self.history_top_k,
+                            domain_id=retrieval_scope.get("domain_id"),
+                            data_version=retrieval_scope.get("data_version"),
+                            trusted_only=True,
+                        )
+                        if span is not None:
+                            span.attributes["match_count"] = len(search.matches)
+                        context.history_matches = list(search.matches)
+                        context.task_context["history_retrieval"] = search.evidence
                 except Exception as exc:
                     context.history_error = str(exc)
                     context.history_write_status = "failed"
@@ -389,6 +648,9 @@ class WorkflowRunner:
                         max_rounds=self.tool_loop_max_rounds,
                         timeout_seconds=self.tool_loop_timeout_seconds,
                         preview_limit=self.tool_loop_preview_limit,
+                        budget_manager=self._tool_budget_manager(),
+                        # plan_only must not run generated SQL or previews.
+                        mode="plan_only" if self.plan_only else "execute",
                     )
                     if self.tool_loop_enabled
                     else None
@@ -397,7 +659,12 @@ class WorkflowRunner:
                 execute_sql_node=ExecuteSqlNode(database_tool),
                 reflect_node=ReflectNode(llm, self.skill_manager),
                 fix_node=FixNode(llm, self.skill_manager),
-                output_node=OutputNode(history_store, vector_store),
+                output_node=OutputNode(
+                    history_store,
+                    vector_store,
+                    domain_id=self.history_domain_id,
+                    data_version=self.history_data_version,
+                ),
                 visualization_node=(
                     VisualizationNode(self.chart_output_dir)
                     if self.visualize and self.chart_output_dir
@@ -426,6 +693,55 @@ class WorkflowRunner:
                     ) from exc
             return output, context
 
+    def _tool_budget_manager(self) -> BudgetManager:
+        """Return the per-run budget manager used by the bounded tool loop."""
+
+        if self.tool_budget_manager is None:
+            self.tool_budget_manager = BudgetManager(limits=self.tool_budget_limits)
+        return self.tool_budget_manager
+
+    def _retrieval_scope(self) -> dict[str, Any]:
+        """The governed retrieval scope this run must filter by (step 13).
+
+        An explicit ``retrieval_scope`` wins; otherwise the scope is derived from
+        the data domain the run was bound to. Every value stays optional: a run
+        with no domain (a local, single-database deployment) publishes nothing and
+        therefore keeps the previous, unfiltered behaviour instead of filtering on
+        an empty string.
+        """
+
+        scope: dict[str, Any] = {}
+        for key, value in self.retrieval_scope.items():
+            if isinstance(value, str):
+                if value.strip():
+                    scope[key] = value.strip()
+            elif isinstance(value, (list, tuple)):
+                cleaned = [str(item).strip() for item in value if str(item).strip()]
+                if cleaned:
+                    scope[key] = cleaned
+        scope.setdefault("domain_id", self.history_domain_id)
+        scope.setdefault("data_version", self.history_data_version)
+        return {
+            key: value
+            for key, value in scope.items()
+            if value not in (None, "", [], ())
+        }
+
+    @staticmethod
+    @contextmanager
+    def _retrieval_span(
+        recorder: SpanRecorder | None, name: str, **attributes: object
+    ):
+        """Record a ``retrieval`` span, or a no-op when tracing is unavailable."""
+
+        if recorder is None:
+            yield None
+            return
+        with recorder.span(
+            f"retrieval.{name}", "retrieval", attributes=dict(attributes)
+        ) as span:
+            yield span
+
     def _build_summary(
         self,
         *,
@@ -435,9 +751,10 @@ class WorkflowRunner:
         duration_ms: float,
         run_id: str,
         error: str | None = None,
+        recorder: SpanRecorder | None = None,
     ) -> dict:
         node_results = context.node_results if context is not None else []
-        return {
+        summary = {
             "run_id": run_id,
             "question": question,
             "workflow_nodes": [
@@ -465,3 +782,18 @@ class WorkflowRunner:
             "output_status": status,
             "error": error,
         }
+        if recorder is not None:
+            # Step 14: token usage (measured or explicitly estimated) plus the
+            # end-to-end and per-kind latency breakdown of this run.
+            summary["usage"] = recorder.usage_summary()
+            latency = recorder.latency_summary(end_to_end_ms=duration_ms)
+            summary["latency"] = latency
+            summary["spans"] = {
+                "total": latency["span_count"],
+                "by_kind": {
+                    kind: entry["count"]
+                    for kind, entry in latency["by_kind"].items()
+                    if entry["count"]
+                },
+            }
+        return summary

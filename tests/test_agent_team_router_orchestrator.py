@@ -14,7 +14,7 @@ from queryforge.orchestration.orchestrator.pipeline_registry import (
     register_pipeline,
 )
 from queryforge.orchestration.runtime.state_store import AgentTeamStateStore
-from queryforge.orchestration.schemas import RoutingDecision, TaskState
+from queryforge.orchestration.schemas import RoutingDecision, TaskState, TaskStatus
 from queryforge.core.config import Config
 from queryforge.domain.semantic import (
     SemanticEntity,
@@ -437,6 +437,132 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
             (store.run_dir(state.run_id) / reference.path).read_text(encoding="utf-8")
         )
         self.assertIn("artifact_schema_error", artifact["payload"])
+
+    def test_cancelled_run_state_round_trips_through_the_reader(self):
+        """A cancelled run must be readable: `cancelled` is part of TaskStatus."""
+        from queryforge.application.agent_service import persist_cancelled_outcome
+
+        state = TaskState(
+            run_id="cancel_round_trip",
+            entrypoint="test",
+            classification=RoutingDecision(
+                task_type="ask_sql",
+                entrypoint="test",
+                confidence=1,
+                reason="test",
+                pipeline="ask_sql",
+            ),
+            status="running",
+        )
+        root = self.root / ".queryforge" / "runs"
+        store = AgentTeamStateStore(root)
+        store.initialize(state)
+
+        persisted = persist_cancelled_outcome(
+            state_root=root, run_id=state.run_id, reason="client disconnected"
+        )
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted["status"], "cancelled")
+
+        # The document the streaming cancel path wrote validates back into the
+        # schema a reader uses, instead of failing on an unknown status.
+        loaded = store.load_state(state.run_id)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.status, "cancelled")
+        self.assertEqual(loaded.current_phase, "cancelled")
+        self.assertEqual(loaded.last_error, "client disconnected")
+        self.assertIn("cancelled", TaskStatus.__args__)
+        # A second cancel never rewrites the terminal outcome.
+        self.assertIsNone(
+            persist_cancelled_outcome(
+                state_root=root, run_id=state.run_id, reason="late cancel"
+            )
+        )
+        self.assertEqual(store.load_state(state.run_id).status, "cancelled")
+        # A run that was never persisted reads as "no state", not as an error.
+        self.assertIsNone(store.load_state("missing_run"))
+
+    def test_a_governance_blocked_run_is_not_rewritten_by_a_late_cancel(self):
+        """H7: `blocked` is a terminal outcome, so a cancel must not replace it."""
+        from queryforge.application.agent_service import persist_cancelled_outcome
+
+        root = self.root / ".queryforge" / "runs"
+        store = AgentTeamStateStore(root)
+
+        def blocked_state(run_id: str) -> TaskState:
+            return TaskState(
+                run_id=run_id,
+                entrypoint="test",
+                classification=RoutingDecision(
+                    task_type="ask_sql",
+                    entrypoint="test",
+                    confidence=1,
+                    reason="test",
+                    pipeline="ask_sql",
+                ),
+                status="blocked",
+                current_phase="governance",
+                blocked_phase="governance",
+                blocked_reason="governance policy blocked the query",
+                last_error=(
+                    "column 'dim_user.email' is outside the allowed column scope"
+                ),
+            )
+
+        state = blocked_state("blocked_then_cancelled")
+        store.initialize(state)
+        before = json.loads(
+            (store.run_dir(state.run_id) / "state.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(
+            persist_cancelled_outcome(
+                state_root=root,
+                run_id=state.run_id,
+                reason="Client disconnected.",
+            )
+        )
+        after = json.loads(
+            (store.run_dir(state.run_id) / "state.json").read_text(encoding="utf-8")
+        )
+        # The governance outcome and its error text survive the disconnect: the
+        # run ended as blocked and stays blocked.
+        self.assertEqual(after, before)
+        loaded = store.load_state(state.run_id)
+        self.assertEqual(loaded.status, "blocked")
+        self.assertEqual(
+            loaded.last_error,
+            "column 'dim_user.email' is outside the allowed column scope",
+        )
+        self.assertEqual(loaded.blocked_reason, "governance policy blocked the query")
+        self.assertEqual(loaded.current_phase, "governance")
+
+        # The same first-writer-wins rule covers every terminal status; a run that
+        # is still running is the only one a cancellation may claim.
+        for status in ("completed", "failed", "cancelled"):
+            with self.subTest(status=status):
+                terminal = blocked_state(f"terminal_{status}")
+                terminal.status = status
+                terminal.last_error = f"the run ended as {status}"
+                store.initialize(terminal)
+                self.assertIsNone(
+                    persist_cancelled_outcome(
+                        state_root=root,
+                        run_id=terminal.run_id,
+                        reason="late cancel",
+                    )
+                )
+                reloaded = store.load_state(terminal.run_id)
+                self.assertEqual(reloaded.status, status)
+                self.assertEqual(reloaded.last_error, f"the run ended as {status}")
+
+        running = blocked_state("still_running")
+        running.status = "running"
+        store.initialize(running)
+        persisted = persist_cancelled_outcome(
+            state_root=root, run_id=running.run_id, reason="client disconnected"
+        )
+        self.assertIsNotNone(persisted)
+        self.assertEqual(store.load_state(running.run_id).status, "cancelled")
 
     def test_plan_uses_integrated_analysis_candidate_governance_and_ops(self):
         output = self.real_service().plan(

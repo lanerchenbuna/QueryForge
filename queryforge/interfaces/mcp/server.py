@@ -64,6 +64,7 @@ def create_mcp_server(service: AgentService | None = None):
     def ask_sql(
         question: str,
         database: str | None = None,
+        domain_id: str | None = None,
         semantic_model_path: str | None = None,
         allow_schema_only: bool = False,
         subject_tree_enabled: bool = False,
@@ -93,6 +94,7 @@ def create_mcp_server(service: AgentService | None = None):
             question,
             AgentOptions(
                 database=database,
+                domain_id=domain_id,
                 semantic_model_path=semantic_model_path,
                 allow_schema_only=allow_schema_only,
                 subject_tree_enabled=subject_tree_enabled,

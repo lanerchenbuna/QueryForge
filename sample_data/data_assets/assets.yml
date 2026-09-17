@@ -11,6 +11,9 @@ semantic_model:
       entity: watch_events
       aggregation: sum
       expression: SUM(fact_watch_events.watch_seconds) / 3600.0
+      # Synonyms are what make a natural question resolve to this governed
+      # metric; without them the lexical matcher only matches the metric name.
+      synonyms: [uploaded watch hours, watch hours, total watch hours, playback hours]
       allowed_dimensions: [watch_events.anime_title, watch_events.device_type]
       time_field: fact_watch_events.watched_at
       owner: engagement-analytics
