@@ -3,6 +3,7 @@ import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
 
 const RUN_STATUSES = new Set([
   "success",
+  "partial",
   "failed",
   "blocked",
   "cancelled",

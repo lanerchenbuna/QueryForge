@@ -6,7 +6,7 @@ import re
 
 import sqlglot
 
-from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
+from queryforge.infrastructure.db.adapters import DatabaseAdapter
 from queryforge.core.schemas.models import ExecutionResult, SqlPolicyDecision, TableSchema
 from queryforge.domain.security import (
     SQLPolicyEngine,
@@ -30,12 +30,13 @@ class DatabaseTool:
 
     def __init__(
         self,
-        connector: SQLiteConnector,
+        connector: DatabaseAdapter,
         policy: SQLSecurityPolicy | None = None,
         *,
         policy_source_path: str | None = None,
     ) -> None:
         self.connector = connector
+        self.dialect = getattr(connector, "dialect", "sqlite")
         raw_schemas = [
             connector.describe_table(table) for table in connector.list_tables()
         ]
@@ -43,6 +44,7 @@ class DatabaseTool:
             policy or SQLSecurityPolicy(),
             raw_schemas,
             source_path=policy_source_path,
+            dialect=self.dialect,
         )
         self.last_policy_decision: SqlPolicyDecision | None = None
 
@@ -102,17 +104,17 @@ class DatabaseTool:
             raise ValueError("preview limit must be a positive integer")
         bounded_limit = min(limit, 100)
         try:
-            tree = sqlglot.parse_one(sql, read="sqlite")
+            tree = sqlglot.parse_one(sql, read=self.dialect)
             if tree is None or not tree.find(sqlglot.exp.Select):
                 raise UnsafeSQLError("preview requires a SELECT query")
-            if tree.find(sqlglot.exp.Limit) is None:
+            if tree.args.get("limit") is None:
                 tree = tree.limit(bounded_limit)
             else:
-                existing = tree.find(sqlglot.exp.Limit)
+                existing = tree.args["limit"]
                 literal = existing.expression
                 current = int(literal.this) if literal and literal.is_int else bounded_limit
                 existing.set("expression", sqlglot.exp.Literal.number(min(current, bounded_limit)))
-            bounded_sql = tree.sql(dialect="sqlite")
+            bounded_sql = tree.sql(dialect=self.dialect)
         except UnsafeSQLError:
             raise
         except Exception as exc:

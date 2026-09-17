@@ -12,6 +12,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_GITHUB_FILE_BYTES = 95 * 1024 * 1024
 SKIP_PARTS = {
     ".git",
+    # Generated evaluation/benchmark reports (gitignored; they embed absolute
+    # workspace paths from the machine that produced them).
+    "reports",
     ".mypy_cache",
     ".pytest_cache",
     ".queryforge",
@@ -67,7 +70,12 @@ def repository_files() -> list[Path]:
         for path in PROJECT_ROOT.rglob("*")
         if path.is_file()
         and not any(
-            part in SKIP_PARTS or part.endswith(".egg-info") for part in path.parts
+            part in SKIP_PARTS
+            or part.endswith(".egg-info")
+            # Local virtualenvs created for a verification run (e.g.
+            # `.venv-acceptance-<step>`) are not part of the repository.
+            or part.startswith(".venv")
+            for part in path.parts
         )
         and path.name != ".env"
         and not (

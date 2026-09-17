@@ -20,3 +20,6 @@
 - [GitHub release checklist](github_release.md)
 - [Report artifacts](report_artifact.md)
 - [NL2SQL evaluation](nl2sql_evaluation.md)
+- [Agent benchmark, ablation and effect gates](database_adapters.md)
+- [End-to-end acceptance demos](demo/README.md)
+- [Database adapters (SQLite default, DuckDB optional)](database_adapters.md)

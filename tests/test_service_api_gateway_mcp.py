@@ -337,7 +337,7 @@ max_limit: 1
         self.assertEqual(response.json()["row_count"], 2)
 
     def test_mcp_missing_sdk_has_clear_install_hint(self):
-        with patch.dict(sys.modules, {"mcp": None}):
+        with patch.dict(sys.modules, {"mcp": None, "mcp.server": None, "mcp.server.fastmcp": None}):
             with self.assertRaisesRegex(MCPUnavailableError, "requirements-mcp.txt"):
                 create_mcp_server(StubService())
 

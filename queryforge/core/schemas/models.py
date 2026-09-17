@@ -300,3 +300,6 @@ class Context(BaseModel):
     reasoning_result: ReasoningResult | None = None
     reasoning_validation: dict[str, Any] | None = None
     node_results: list[NodeResult] = Field(default_factory=list)
+    # Shared structured context for step 04/05/07/08 workflows (schema
+    # retrieval evidence, typed error categories, analysis patches, ...).
+    task_context: dict[str, Any] = Field(default_factory=dict)

@@ -33,7 +33,7 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -52,7 +52,14 @@ export default defineConfig(async () => {
       sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
-        config: localBindingConfig,
+        config: {
+          ...localBindingConfig,
+          // The local Worker has its own environment. Forward this non-secret
+          // loopback/backend setting explicitly; hosted vars stay deployment-owned.
+          ...(command === "serve" && process.env.QUERYFORGE_API_URL
+            ? { vars: { QUERYFORGE_API_URL: process.env.QUERYFORGE_API_URL } }
+            : {}),
+        },
       }),
     ],
   };

@@ -52,6 +52,34 @@ class _PublicationCheckpoint:
     metadata_backup: Path
 
 
+@dataclass(frozen=True)
+class PublicationStateReport:
+    """What a crashed publication would have left behind.
+
+    A build is only allowed to start from a clean state: publication is atomic
+    across the publish database, the metadata registry, and the semantic model,
+    so any residue of an interrupted batch means the three can disagree and must
+    be reconciled by an operator before new data is written on top.
+    """
+
+    clean: bool
+    pending_semantic_files: list[str]
+    orphan_checkpoints: list[str]
+    catalog_mismatches: list[str]
+    staging_tables: list[str]
+    blocking_reasons: list[str]
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "clean": self.clean,
+            "pending_semantic_files": list(self.pending_semantic_files),
+            "orphan_checkpoints": list(self.orphan_checkpoints),
+            "catalog_mismatches": list(self.catalog_mismatches),
+            "staging_tables": list(self.staging_tables),
+            "blocking_reasons": list(self.blocking_reasons),
+        }
+
+
 class DataAssetBuilder:
     """Build governed SQLite data assets without weakening QueryForge's read-only path."""
 
@@ -60,6 +88,8 @@ class DataAssetBuilder:
         self.state_root = Path(state_root).expanduser().resolve()
         self.staging_database = self.state_root / "staging.sqlite"
         self.metadata_database = self.state_root / "metadata.sqlite"
+        #: Quarantine rows of the batch in flight, replayed if the batch rolls back.
+        self._quarantine_buffer: dict[str, list[tuple[str, str, dict[str, Any]]]] = {}
         self.default_semantic_model = self.publish_database.with_suffix(
             ".semantic.yml"
         )
@@ -119,6 +149,18 @@ class DataAssetBuilder:
         """The locked batch body; the builder lock is held by :meth:`build_all`."""
         self.state_root.mkdir(parents=True, exist_ok=True)
         self.publish_database.parent.mkdir(parents=True, exist_ok=True)
+        # Refuse to build on top of an interrupted batch: the publish database,
+        # the metadata registry, and the semantic model may disagree, and the
+        # only safe starting point is a state an operator has reconciled.
+        pre_state = self.check_publication_state(semantic_model_output)
+        if pre_state.blocking_reasons:
+            raise DataAssetError(
+                "Publication blocked: the previous batch left an inconsistent "
+                "state. "
+                + " | ".join(pre_state.blocking_reasons)
+                + " Run DataAssetBuilder.reconcile_publication_state() after "
+                "inspecting the residue before publishing again."
+            )
         self._initialize_metadata()
         checkpoint = self._create_publication_checkpoint()
         results = [self._build_asset(asset) for asset in config.assets]
@@ -170,6 +212,7 @@ class DataAssetBuilder:
         if any(result.status == "failed" for result in results):
             pending_path.unlink(missing_ok=True)
             self._restore_publication_checkpoint(checkpoint)
+            self._replay_quarantine()
             for result in results:
                 if result.status == "success":
                     result.error = (
@@ -185,7 +228,38 @@ class DataAssetBuilder:
                 self._record_contract_report(report, pending_path)
         else:
             self._discard_publication_checkpoint(checkpoint)
+        self._quarantine_buffer.clear()
         return results
+
+    def _replay_quarantine(self) -> None:
+        """Re-record the rejected rows of a rolled-back batch.
+
+        The batch rollback restores the metadata database, so the quarantine rows
+        written during the attempt disappear with it; an operator diagnosing a
+        refusal would see the count but not the rows. Writing them back keeps the
+        *failure evidence* without keeping any partially applied publish state.
+        """
+        if not self._quarantine_buffer:
+            return
+        rows = [
+            (run_id, asset_name, reason, json.dumps(record, ensure_ascii=False, default=str))
+            for run_id, entries in self._quarantine_buffer.items()
+            for asset_name, reason, record in entries
+        ]
+        if not rows:
+            return
+        try:
+            with sqlite3.connect(self.metadata_database) as connection:
+                connection.executemany(
+                    """
+                    INSERT INTO asset_quarantine(
+                        run_id, asset_name, reason, raw_record_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [(*row, _now()) for row in rows],
+                )
+        except sqlite3.Error as exc:  # pragma: no cover - diagnosis must not mask the failure
+            _logger.error("Could not record quarantine rows after rollback: %s", exc)
 
     def build(self, asset: DataAssetSpec) -> AssetBuildResult:
         """Reject publication that could bypass the mandatory semantic gate."""
@@ -376,6 +450,14 @@ class DataAssetBuilder:
     ) -> None:
         if not quarantined:
             return
+        # Keep the rows in memory as well: a batch that fails later rolls the
+        # whole metadata database back to its checkpoint, which would erase the
+        # diagnosis an operator needs most (WHICH rows were rejected). The failure
+        # path replays them after the rollback, so a failed batch keeps exactly
+        # one thing: the evidence of why it failed.
+        self._quarantine_buffer.setdefault(run_id, []).extend(
+            (asset_name, reason, record) for record, reason in quarantined
+        )
         with sqlite3.connect(self.metadata_database) as connection:
             connection.executemany(
                 """
@@ -814,6 +896,158 @@ class DataAssetBuilder:
     ) -> None:
         checkpoint.publish_backup.unlink(missing_ok=True)
         checkpoint.metadata_backup.unlink(missing_ok=True)
+
+    # ------------------------------------------------- interrupted mid-state
+
+    def check_publication_state(
+        self, semantic_model_output: str | Path | None = None
+    ) -> PublicationStateReport:
+        """Detect residue of an interrupted publication.
+
+        Publication is atomic across three artifacts — the publish database, the
+        metadata registry (watermarks + ``semantic_catalog``), and the semantic
+        model file — so a process that died mid-batch can leave them disagreeing.
+        Nothing is mutated here: the state is measured so a caller can refuse to
+        publish on top of it and an operator can reconcile it deliberately.
+        """
+        semantic_path = Path(
+            semantic_model_output or self.default_semantic_model
+        ).expanduser().resolve()
+        pending_path = self._pending_semantic_path(semantic_path)
+
+        pending: list[str] = []
+        if pending_path.is_file():
+            pending.append(str(pending_path))
+
+        orphans: list[str] = []
+        if self.state_root.is_dir():
+            for pattern in (".publish-*.sqlite", ".metadata-*.sqlite"):
+                for candidate in sorted(self.state_root.glob(pattern)):
+                    if candidate.is_file():
+                        orphans.append(str(candidate))
+
+        mismatches: list[str] = []
+        staging_tables: list[str] = []
+        publish_tables = self._publish_table_names()
+        if self.metadata_database.is_file():
+            catalog = self._catalog_entries()
+            for asset_name, target_table in sorted(catalog.items()):
+                if publish_tables is not None and target_table not in publish_tables:
+                    mismatches.append(
+                        f"catalog_entry_without_table: {asset_name} -> {target_table}"
+                    )
+            if publish_tables is not None:
+                for table in sorted(publish_tables):
+                    if table.startswith("staging_"):
+                        continue
+                    if table not in set(catalog.values()):
+                        mismatches.append(f"table_without_catalog_entry: {table}")
+        staging_tables = self._staging_table_names()
+
+        reasons: list[str] = []
+        if pending:
+            reasons.append(
+                "pending_semantic_model: an interrupted batch left "
+                f"{pending[0]}; the live semantic model was never replaced"
+            )
+        if orphans:
+            reasons.append(
+                "orphan_publication_checkpoint: an interrupted batch left "
+                f"{len(orphans)} checkpoint file(s) under {self.state_root}; "
+                "rollback or cleanup did not finish"
+            )
+        if mismatches:
+            reasons.append(
+                "registry_publish_mismatch: "
+                + "; ".join(mismatches[:5])
+                + ("" if len(mismatches) <= 5 else f" (+{len(mismatches) - 5} more)")
+            )
+        return PublicationStateReport(
+            clean=not reasons,
+            pending_semantic_files=pending,
+            orphan_checkpoints=orphans,
+            catalog_mismatches=mismatches,
+            staging_tables=staging_tables,
+            blocking_reasons=reasons,
+        )
+
+    def reconcile_publication_state(
+        self,
+        semantic_model_output: str | Path | None = None,
+        *,
+        discard_pending: bool = True,
+        discard_orphan_checkpoints: bool = False,
+    ) -> PublicationStateReport:
+        """Clear the residue an interrupted publication may have left.
+
+        Only residues that cannot be live state are removed by default: a pending
+        semantic model is by definition not the published model. Checkpoint
+        backups *can* hold the last good snapshot, so they are kept unless the
+        caller explicitly opts in after inspecting them. The returned report is
+        the state measured again after the cleanup.
+        """
+        semantic_path = Path(
+            semantic_model_output or self.default_semantic_model
+        ).expanduser().resolve()
+        before = self.check_publication_state(semantic_path)
+        if discard_pending:
+            for name in before.pending_semantic_files:
+                Path(name).unlink(missing_ok=True)
+        if discard_orphan_checkpoints:
+            for name in before.orphan_checkpoints:
+                Path(name).unlink(missing_ok=True)
+        after = self.check_publication_state(semantic_path)
+        if before.blocking_reasons and not after.blocking_reasons:
+            _logger.info(
+                "Reconciled interrupted publication state for %s", self.publish_database
+            )
+        return after
+
+    @staticmethod
+    def _pending_semantic_path(semantic_path: Path) -> Path:
+        return semantic_path.with_suffix(f".pending{semantic_path.suffix}")
+
+    def _publish_table_names(self) -> set[str] | None:
+        """Every table in the publish database, or ``None`` when it does not exist."""
+        if not self.publish_database.is_file():
+            return None
+        try:
+            with sqlite3.connect(self.publish_database) as connection:
+                rows = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+        except sqlite3.Error as exc:  # pragma: no cover - unreadable database
+            _logger.error("Cannot read publish database %s: %s", self.publish_database, exc)
+            return None
+        return {
+            str(row[0])
+            for row in rows
+            # ``sqlite_%`` are engine internals (e.g. sqlite_sequence), never assets.
+            if row and row[0] and not str(row[0]).startswith("sqlite_")
+        }
+
+    def _catalog_entries(self) -> dict[str, str]:
+        try:
+            with sqlite3.connect(self.metadata_database) as connection:
+                rows = connection.execute(
+                    "SELECT asset_name, target_table FROM semantic_catalog"
+                ).fetchall()
+        except sqlite3.Error:  # pragma: no cover - metadata not initialised yet
+            return {}
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def _staging_table_names(self) -> list[str]:
+        if not self.staging_database.is_file():
+            return []
+        try:
+            with sqlite3.connect(self.staging_database) as connection:
+                rows = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name LIKE 'staging_%'"
+                ).fetchall()
+        except sqlite3.Error:  # pragma: no cover - unreadable staging database
+            return []
+        return sorted(str(row[0]) for row in rows if row and row[0])
 
     def _acquire_builder_lock(self) -> Any:
         """Take an exclusive advisory lock (``fcntl.flock``) for the whole batch.

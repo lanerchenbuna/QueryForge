@@ -1,0 +1,264 @@
+version: 1
+name: retail_orders
+description: Governed semantics for a synthetic multi-store retail order dataset.
+entities:
+- name: calendar
+  table: dim_date
+  description: Conformed retail calendar shared by orders and customer signups.
+  entity_type: dimension
+  synonyms: [date, calendar, day]
+  primary_key: [date_key]
+  grain: [date_key]
+  expected_columns: [date_key, full_date, year, quarter, month_number, month_name, week_of_year,
+    day_of_week, is_weekend, is_holiday_season]
+  dimensions:
+  - name: date
+    column: full_date
+    synonyms: [full date, order date]
+  - name: year
+    column: year
+    synonyms: [calendar year]
+  - name: quarter
+    column: quarter
+    synonyms: [calendar quarter]
+  - name: month
+    column: month_name
+    synonyms: [calendar month]
+  - name: month_number
+    column: month_number
+    synonyms: [month index]
+  - name: week_of_year
+    column: week_of_year
+    synonyms: [week]
+  - name: day_of_week
+    column: day_of_week
+    synonyms: [weekday]
+  - name: weekend
+    column: is_weekend
+  - name: holiday_season
+    column: is_holiday_season
+- name: store
+  table: dim_store
+  description: Retail store with region, format, and physical attributes.
+  entity_type: dimension
+  synonyms: [store, shop, branch, location]
+  primary_key: [store_id]
+  grain: [store_id]
+  expected_columns: [store_id, store_name, region, city, store_format, opened_year, floor_area_sqm]
+  dimensions:
+  - name: name
+    column: store_name
+    synonyms: [store name, shop name]
+  - name: region
+    column: region
+    synonyms: [sales region]
+  - name: city
+    column: city
+    synonyms: [town]
+  - name: store_format
+    column: store_format
+    synonyms: [format, store type]
+  - name: floor_area_sqm
+    column: floor_area_sqm
+- name: product
+  table: dim_product
+  description: Retail product catalog with merchandising attributes and cost.
+  entity_type: dimension
+  synonyms: [product, item, sku, merchandise]
+  primary_key: [product_id]
+  grain: [product_id]
+  expected_columns: [product_id, product_name, category, subcategory, list_price_usd, unit_cost_usd,
+    is_seasonal]
+  dimensions:
+  - name: name
+    column: product_name
+    synonyms: [product name]
+  - name: category
+    column: category
+    synonyms: [product category]
+  - name: subcategory
+    column: subcategory
+  - name: seasonal
+    column: is_seasonal
+  - name: list_price
+    column: list_price_usd
+    synonyms: [price]
+- name: customer
+  table: dim_customer
+  description: Retail customer with loyalty tier and home region; contact data is withheld.
+  entity_type: dimension
+  synonyms: [customer, shopper, buyer]
+  primary_key: [customer_id]
+  grain: [customer_id]
+  hidden_columns: [customer_name, customer_email]
+  expected_columns: [customer_id, customer_name, customer_email, loyalty_tier, signup_date_key,
+    home_region]
+  dimensions:
+  - name: loyalty_tier
+    column: loyalty_tier
+    synonyms: [tier, loyalty level]
+  - name: home_region
+    column: home_region
+    synonyms: [customer region]
+- name: order
+  table: fact_order
+  description: Retail order fact at one row per placed order.
+  entity_type: fact
+  sla: PT4H
+  refresh_frequency: hourly
+  synonyms: [order, purchase, transaction, sale]
+  primary_key: [order_id]
+  grain: [order_id]
+  expected_columns: [order_id, order_date_key, store_id, customer_id, sales_channel, order_status,
+    payment_method, item_count, gross_amount_usd, discount_usd, shipping_usd, net_amount_usd,
+    returned_flag]
+  dimensions:
+  - name: sales_channel
+    column: sales_channel
+    synonyms: [channel, sales channel]
+  - name: order_status
+    column: order_status
+    synonyms: [status]
+  - name: payment_method
+    column: payment_method
+    synonyms: [payment type]
+  - name: item_count
+    column: item_count
+  - name: returned
+    column: returned_flag
+    synonyms: [returned order]
+- name: order_item
+  table: fact_order_item
+  description: Retail order line fact at product-within-order grain.
+  entity_type: fact
+  synonyms: [order line, order item, basket line]
+  primary_key: [order_item_id]
+  grain: [order_item_id]
+  expected_columns: [order_item_id, order_id, product_id, quantity, unit_price_usd, discount_usd,
+    net_amount_usd]
+  dimensions:
+  - name: quantity
+    column: quantity
+  - name: unit_price
+    column: unit_price_usd
+relationships:
+- name: orders_to_date
+  from: fact_order.order_date_key
+  to: dim_date.date_key
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: orders_to_store
+  from: fact_order.store_id
+  to: dim_store.store_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: orders_to_customer
+  from: fact_order.customer_id
+  to: dim_customer.customer_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: order_items_to_order
+  from: fact_order_item.order_id
+  to: fact_order.order_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: order_items_to_product
+  from: fact_order_item.product_id
+  to: dim_product.product_id
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+- name: customers_to_signup_date
+  from: dim_customer.signup_date_key
+  to: dim_date.date_key
+  relationship_type: many_to_one
+  cardinality_contract: {source: many, target: one, enforcement: physical_fk}
+join_paths:
+- name: order_items_to_date_via_order
+  from_entity: order_item
+  to_entity: calendar
+  relationships: [order_items_to_order, orders_to_date]
+  description: Safe path from order lines to the order calendar.
+- name: order_items_to_store_via_order
+  from_entity: order_item
+  to_entity: store
+  relationships: [order_items_to_order, orders_to_store]
+  description: Safe path from order lines to the fulfilling store.
+- name: order_items_to_customer_via_order
+  from_entity: order_item
+  to_entity: customer
+  relationships: [order_items_to_order, orders_to_customer]
+  description: Safe path from order lines to the purchasing customer.
+metrics:
+- name: net_revenue
+  description: Net order value after line discounts and including shipping.
+  entity: order
+  aggregation: sum
+  expression: SUM(fact_order.net_amount_usd)
+  synonyms: [net revenue, revenue, net sales, sales]
+  allowed_dimensions: [order.sales_channel, order.order_status, order.payment_method, store.name,
+    store.region, store.city, store.store_format, customer.loyalty_tier, customer.home_region,
+    calendar.year, calendar.quarter, calendar.month, calendar.month_number]
+  time_field: fact_order.order_date_key
+- name: order_count
+  description: Count of distinct retail orders.
+  entity: order
+  aggregation: count
+  expression: COUNT(DISTINCT fact_order.order_id)
+  synonyms: [order count, orders, number of orders]
+  allowed_dimensions: [order.sales_channel, order.order_status, order.payment_method, store.name,
+    store.region, store.city, store.store_format, customer.loyalty_tier, customer.home_region,
+    calendar.year, calendar.quarter, calendar.month, calendar.month_number]
+  time_field: fact_order.order_date_key
+- name: average_order_value
+  description: Net order value divided by the number of orders.
+  entity: order
+  aggregation: ratio
+  expression: CAST(SUM(fact_order.net_amount_usd) AS REAL) / NULLIF(COUNT(DISTINCT fact_order.order_id),
+    0)
+  synonyms: [average order value, AOV, average basket]
+  allowed_dimensions: [order.sales_channel, store.region, store.store_format, customer.loyalty_tier,
+    calendar.year, calendar.month]
+  time_field: fact_order.order_date_key
+- name: discount_amount
+  description: Total discount granted on retail orders.
+  entity: order
+  aggregation: sum
+  expression: SUM(fact_order.discount_usd)
+  synonyms: [discount amount, discounts, markdown]
+  allowed_dimensions: [order.sales_channel, order.order_status, store.region, store.store_format,
+    calendar.year, calendar.month]
+  time_field: fact_order.order_date_key
+- name: returned_order_rate
+  description: Returned orders divided by all placed orders.
+  entity: order
+  aggregation: ratio
+  expression: CAST(SUM(CASE WHEN fact_order.returned_flag = 1 THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(*),
+    0)
+  synonyms: [returned order rate, return rate, returns]
+  allowed_dimensions: [order.sales_channel, store.region, store.store_format, customer.loyalty_tier,
+    calendar.year, calendar.month]
+  time_field: fact_order.order_date_key
+- name: units_sold
+  description: Total product units sold at order-line grain.
+  entity: order_item
+  aggregation: sum
+  expression: SUM(fact_order_item.quantity)
+  synonyms: [units sold, unit sales, quantity sold]
+  allowed_dimensions: [product.name, product.category, product.subcategory, store.region, store.store_format,
+    calendar.year, calendar.month, calendar.month_number]
+- name: order_item_revenue
+  description: Net revenue recognised at order-line grain.
+  entity: order_item
+  aggregation: sum
+  expression: SUM(fact_order_item.net_amount_usd)
+  synonyms: [line revenue, order item revenue]
+  allowed_dimensions: [product.name, product.category, product.subcategory, store.region, store.store_format,
+    calendar.year, calendar.month, calendar.month_number]
+- name: average_unit_price
+  description: Revenue-weighted average price per unit sold.
+  entity: order_item
+  aggregation: ratio
+  expression: CAST(SUM(fact_order_item.unit_price_usd * fact_order_item.quantity) AS REAL) / NULLIF(SUM(fact_order_item.quantity),
+    0)
+  synonyms: [average unit price, average price, price per unit]
+  allowed_dimensions: [product.category, product.subcategory, store.region, calendar.month]

@@ -10,10 +10,36 @@ from datetime import datetime, timezone
 from queryforge.workflow.node.base import Node
 from queryforge.workflow.event_emitter import emit_event
 from queryforge.core.schemas.models import Context, NodeResult, SqlAttempt
-from queryforge.core.observability import node_logging_context, run_logging_context
+from queryforge.core.observability import (
+    current_span_recorder,
+    node_logging_context,
+    run_logging_context,
+)
+from queryforge.domain.semantic import normalize_sql_signature
 
 
 LOGGER = logging.getLogger("queryforge.workflow")
+
+
+def _context_summary(context: Context) -> dict:
+    """Bounded, payload-free summary of how far a stopped workflow got."""
+
+    return {
+        "completed_nodes": [
+            result.node_name for result in context.node_results if result.success
+        ],
+        "tables_loaded": len(context.relevant_tables),
+        "date_ranges": (
+            len(context.date_context.ranges) if context.date_context else 0
+        ),
+        "sql_generated": context.sql_context is not None,
+        "plan_approved": context.plan_approved,
+        "query_executed": context.execution_result is not None,
+        "retry_count": context.retry_count,
+        "sql_attempts": len(context.sql_attempt_history),
+        "fix_attempts": len(context.fix_attempts),
+        "last_execution_error": context.last_execution_error,
+    }
 
 
 def _execute_observed_node(context: Context, node: Node) -> NodeResult:
@@ -27,72 +53,101 @@ def _execute_observed_node(context: Context, node: Node) -> NodeResult:
         status="running",
         message=f"Started {node.name}.",
     )
+    recorder = current_span_recorder(context.run_id)
     with run_logging_context(context.run_id), node_logging_context(node.name):
-        LOGGER.info("node_start node=%s started_at=%s", node.name, started_at.isoformat())
+        # The span is opened inside the node context so its run/node identity is
+        # the node that actually produced the work.
+        span = (
+            recorder.begin(f"step.{node.name}", "step", attributes={"node": node.name})
+            if recorder is not None
+            else None
+        )
+        status = "success"
         try:
-            result = node.execute(context)
-        except Exception as exc:
-            result = NodeResult(
-                node_name=node.name,
-                success=False,
-                status="failed",
-                error=f"Unexpected node error: {exc}",
+            LOGGER.info(
+                "node_start node=%s started_at=%s", node.name, started_at.isoformat()
             )
-        ended_at = datetime.now(timezone.utc)
-        duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        result = result.model_copy(
-            update={
-                "started_at": started_at.isoformat(),
-                "ended_at": ended_at.isoformat(),
-                "duration_ms": duration_ms,
-            }
-        )
-        context.node_results.append(result)
-        emit_event(
-            context.event_emitter,
-            "node_completed" if result.success else "node_failed",
-            context.run_id,
-            node_name=node.name,
-            status=result.status,
-            message=result.message if result.success else result.error,
-            data={"duration_ms": duration_ms},
-        )
-        log = LOGGER.info if result.success else LOGGER.error
-        log(
-            "node_end node=%s ended_at=%s duration_ms=%s success=%s error=%s",
-            node.name,
-            ended_at.isoformat(),
-            duration_ms,
-            result.success,
-            result.error,
-        )
-        return result
+            try:
+                result = node.execute(context)
+            except WorkflowCancelled:
+                # Cancellation is not a node failure: it must reach the client as
+                # ``cancelled`` and must never be persisted as a failed run.
+                status = "cancelled"
+                raise
+            except Exception as exc:
+                result = NodeResult(
+                    node_name=node.name,
+                    success=False,
+                    status="failed",
+                    error=f"Unexpected node error: {exc}",
+                )
+            ended_at = datetime.now(timezone.utc)
+            duration_ms = round((time.perf_counter() - started) * 1000, 3)
+            result = result.model_copy(
+                update={
+                    "started_at": started_at.isoformat(),
+                    "ended_at": ended_at.isoformat(),
+                    "duration_ms": duration_ms,
+                }
+            )
+            context.node_results.append(result)
+            status = "success" if result.success else "failed"
+            emit_event(
+                context.event_emitter,
+                "node_completed" if result.success else "node_failed",
+                context.run_id,
+                node_name=node.name,
+                status=result.status,
+                message=result.message if result.success else result.error,
+                data={"duration_ms": duration_ms},
+            )
+            log = LOGGER.info if result.success else LOGGER.error
+            log(
+                "node_end node=%s ended_at=%s duration_ms=%s success=%s error=%s",
+                node.name,
+                ended_at.isoformat(),
+                duration_ms,
+                result.success,
+                result.error,
+            )
+        except BaseException:
+            if status == "success":
+                status = "failed"
+            raise
+        finally:
+            if recorder is not None and span is not None:
+                recorder.end(span, status=status)
+    return result
 
 
 class WorkflowError(RuntimeError):
     """Raised when a workflow node reports failure."""
 
     def __init__(self, node_name: str, error: str, context: Context) -> None:
-        completed = [result.node_name for result in context.node_results if result.success]
-        summary = {
-            "completed_nodes": completed,
-            "tables_loaded": len(context.relevant_tables),
-            "date_ranges": len(context.date_context.ranges) if context.date_context else 0,
-            "sql_generated": context.sql_context is not None,
-            "plan_approved": context.plan_approved,
-            "query_executed": context.execution_result is not None,
-            "retry_count": context.retry_count,
-            "sql_attempts": len(context.sql_attempt_history),
-            "fix_attempts": len(context.fix_attempts),
-            "last_execution_error": context.last_execution_error,
-        }
-        super().__init__(f"node={node_name}: {error}; context={summary}")
+        super().__init__(
+            f"node={node_name}: {error}; context={_context_summary(context)}"
+        )
         self.node_name = node_name
         self.context = context
 
 
-class WorkflowCancelled(WorkflowError):
-    """Raised when a streaming client disconnects and the run should stop."""
+class WorkflowCancelled(BaseException):
+    """Raised when a streaming client disconnects and the run should stop.
+
+    Deliberately *not* an :class:`Exception`: cancellation is not a workflow
+    failure, so a generic ``except Exception`` handler (for example the
+    orchestrator's failure path) must not catch it and persist the run as
+    ``failed``. Streaming transports catch it explicitly and report the
+    ``cancelled`` outcome.
+    """
+
+    def __init__(self, node_name: str, error: str, context: Context) -> None:
+        super().__init__(
+            f"node={node_name}: {error}; context={_context_summary(context)}"
+        )
+        self.node_name = node_name
+        self.context = context
+        self.cancelled = True
 
 
 class Workflow:
@@ -193,6 +248,7 @@ class ReflectiveWorkflow:
                     assert self.context.final_output is not None
                     return self.context.final_output
 
+            self._register_attempt_signature()
             execute_result = self._run(self.execute_sql_node)
             attempt = SqlAttempt(
                 attempt_number=len(self.context.sql_attempt_history) + 1,
@@ -308,6 +364,36 @@ class ReflectiveWorkflow:
                 self.context,
             )
 
+    def _register_attempt_signature(self) -> None:
+        """Track normalized SQL per attempt and stop A -> B -> A repair cycles."""
+        signature = normalize_sql_signature(
+            self.context.sql_context.sql if self.context.sql_context else ""
+        )
+        if not signature:
+            return
+        signatures = self.context.task_context.setdefault("attempt_signatures", [])
+        if not isinstance(signatures, list):
+            signatures = []
+            self.context.task_context["attempt_signatures"] = signatures
+        if signature in signatures:
+            previous = signatures.index(signature) + 1
+            self._record_budget_error("Repeated SQL cycle")
+            raise WorkflowError(
+                "retry_limit",
+                "Repeated SQL cycle detected: attempt "
+                f"{len(signatures) + 1} reuses the normalized SQL already executed at "
+                f"attempt {previous}; the repair loop is not making progress.",
+                self.context,
+            )
+        signatures.append(signature)
+
+    def _record_budget_error(self, detail: str) -> None:
+        # Imported lazily: queryforge.workflow.errors imports WorkflowError from
+        # this module, so a module-level import here would be circular.
+        from queryforge.workflow.errors import record_error_category
+
+        record_error_category(self.context, detail)
+
     def _require_retry(self, trigger: str, detail: str) -> None:
         if self.context.retry_count < self.max_retries:
             emit_event(
@@ -329,6 +415,9 @@ class ReflectiveWorkflow:
             }
             for attempt in self.context.sql_attempt_history
         ]
+        self._record_budget_error(
+            f"Maximum SQL retries ({self.max_retries}) exhausted after {trigger}"
+        )
         raise WorkflowError(
             "retry_limit",
             f"Maximum SQL retries ({self.max_retries}) exhausted after {trigger}. "
@@ -348,12 +437,23 @@ class ReflectiveWorkflow:
 
     def _run(self, node: Node) -> NodeResult:
         self._check_cancelled()
-        return _execute_observed_node(self.context, node)
+        result = _execute_observed_node(self.context, node)
+        # A cancellation that arrived while the node was running (for example the
+        # SQLite progress handler interrupting a long statement) makes the node
+        # fail, but the run is not a failure: report it as cancelled so it is
+        # neither retried nor persisted as ``failed``.
+        self._check_cancelled()
+        return result
 
     def _check_cancelled(self) -> None:
         if self.cancel_check is not None and self.cancel_check():
+            completed = [
+                result.node_name
+                for result in self.context.node_results
+                if result.success
+            ]
             raise WorkflowCancelled(
-                "cancelled",
+                completed[-1] if completed else "workflow",
                 "Workflow cancelled because the streaming client disconnected.",
                 self.context,
             )

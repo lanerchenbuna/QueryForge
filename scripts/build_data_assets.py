@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
             "SQLite publication, lineage, and semantic publication."
         )
     )
-    parser.add_argument("--config", required=True, help="Asset build YAML path")
+    parser.add_argument("--config", help="Asset build YAML path")
     parser.add_argument(
         "--publish-database",
         required=True,
@@ -33,13 +33,59 @@ def parse_args() -> argparse.Namespace:
         default=".queryforge/data_assets",
         help="Staging, quality, watermark, lineage, and generated semantic output directory",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--check-state",
+        action="store_true",
+        help=(
+            "Only report the state left by a previous, possibly interrupted "
+            "publication (pending semantic model, orphan checkpoints, registry "
+            "mismatch). Exits 1 when the state needs reconciliation."
+        ),
+    )
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help=(
+            "Clear residue an interrupted publication left behind (a pending "
+            "semantic model is always discarded; checkpoint backups only with "
+            "--discard-checkpoints) and report the resulting state."
+        ),
+    )
+    parser.add_argument(
+        "--discard-checkpoints",
+        action="store_true",
+        help=(
+            "With --reconcile, also delete orphan publication checkpoint "
+            "backups. They may hold the last good snapshot, so inspect them first."
+        ),
+    )
+    parser.add_argument(
+        "--semantic-model",
+        help="Semantic model path the state is checked or reconciled against",
+    )
+    args = parser.parse_args()
+    if not (args.check_state or args.reconcile) and not args.config:
+        parser.error("--config is required unless --check-state or --reconcile is used")
+    return args
 
 
 def main() -> int:
     args = parse_args()
+    semantic_model = args.semantic_model or str(
+        Path(args.publish_database).with_suffix(".semantic.yml")
+    )
     try:
         builder = DataAssetBuilder(args.publish_database, args.state_root)
+        if args.check_state or args.reconcile:
+            report = (
+                builder.reconcile_publication_state(
+                    semantic_model, discard_orphan_checkpoints=args.discard_checkpoints
+                )
+                if args.reconcile
+                else builder.check_publication_state(semantic_model)
+            )
+            print(json.dumps(report.summary(), ensure_ascii=False, indent=2))
+            return 0 if report.clean else 1
         results = builder.build_from_file(args.config)
     except Exception as exc:
         print(f"QueryForge asset build failed: {exc}", file=sys.stderr)

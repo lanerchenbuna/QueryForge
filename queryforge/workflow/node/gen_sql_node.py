@@ -34,6 +34,8 @@ class GenSqlNode(Node):
             return self.failure("No table schemas are available for SQL generation")
 
         prompt = self._build_prompt(context)
+        if context.task_context.get("sql_dialect") == "duckdb":
+            prompt = prompt.replace("SQLite", "DuckDB") + "\nUse DuckDB native dates; external readers/extensions and non-main schemas are forbidden."
         try:
             payload = self.llm.generate_json(prompt)
             context.sql_context = SQLContext.model_validate(payload)

@@ -1,5 +1,7 @@
 "use client";
 
+import { publicationOutcome } from "./lib/publication-status";
+
 import {
   ChangeEvent,
   FormEvent,
@@ -8,6 +10,38 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  extractRunDetail,
+  extractRunText,
+  isFailureStatus,
+  normalizeRunStatus,
+  outcomeLabel,
+  persistableRunStatus,
+  provenanceOf,
+  runModeLabel,
+  runRecordStatus,
+  statusLabel,
+  type Provenance,
+  type RunMode,
+  type RunRecordStatus,
+  type RunStatus,
+  type RunView,
+} from "./lib/run-status";
+import {
+  EVENT_PROTOCOL_VERSION,
+  consumeAskStream,
+  initialStreamState,
+  streamEvidence,
+  streamObservability,
+  streamRunDetail,
+  streamRunStatus,
+  type StreamRunState,
+} from "./lib/run-stream";
+import {
+  DEMO_TRUST_NOTICE,
+  buildTrustTrace,
+  trustEvidenceCount,
+} from "./lib/trust-trace";
 
 type View = "domains" | "overview" | "sources" | "semantic" | "ask" | "runs";
 type ConnectionState = "checking" | "live" | "demo";
@@ -35,21 +69,15 @@ type Metric = {
   description: string;
 };
 
-type QueryResult = {
-  status: string;
-  runId: string;
-  explanation: string;
-  sql: string;
-  columns: string[];
-  rows: Array<Array<string | number>>;
-  rowCount: number;
-};
+type QueryResult = RunView;
 
 type RunRecord = {
   id: string;
   domainId: string;
   question: string;
-  status: "Passed" | "Blocked" | "Running";
+  status: RunRecordStatus;
+  /** Demo history is labelled so sample records are never read as live runs. */
+  isDemo?: boolean;
   model: string;
   rows: number;
   duration: string;
@@ -496,10 +524,14 @@ const GRAPH_LINKS = [
 ];
 
 const DEMO_RESULT: QueryResult = {
+  provenance: "demo",
+  mode: "demo",
   status: "success",
   runId: "qf_7a3e2c91",
   explanation:
     "Fantasy leads total watch hours, while Mystery shows the strongest completion rate. The query uses the governed Watch → Episode → Anime join path and excludes invalid sessions.",
+  planText: "",
+  detail: "",
   sql: `SELECT
   g.genre_name AS genre,
   ROUND(SUM(w.watch_seconds) / 3600.0, 1) AS watch_hours,
@@ -526,6 +558,7 @@ LIMIT 6;`,
     ["Comedy", 1104.2, 65.7],
   ],
   rowCount: 6,
+  output: null,
 };
 
 const INITIAL_RUNS: RunRecord[] = [
@@ -534,6 +567,7 @@ const INITIAL_RUNS: RunRecord[] = [
     domainId: SAMPLE_DOMAIN_ID,
     question: "Compare watch hours and completion rate by genre",
     status: "Passed",
+    isDemo: true,
     model: "qwen-plus",
     rows: 6,
     duration: "1.84s",
@@ -544,6 +578,7 @@ const INITIAL_RUNS: RunRecord[] = [
     domainId: SAMPLE_DOMAIN_ID,
     question: "Top anime by merchandise GMV this quarter",
     status: "Passed",
+    isDemo: true,
     model: "qwen-plus",
     rows: 10,
     duration: "2.12s",
@@ -554,6 +589,7 @@ const INITIAL_RUNS: RunRecord[] = [
     domainId: SAMPLE_DOMAIN_ID,
     question: "Show every user email with subscription revenue",
     status: "Blocked",
+    isDemo: true,
     model: "qwen-plus",
     rows: 0,
     duration: "0.41s",
@@ -564,6 +600,7 @@ const INITIAL_RUNS: RunRecord[] = [
     domainId: SAMPLE_DOMAIN_ID,
     question: "Monthly active subscribers by plan tier",
     status: "Passed",
+    isDemo: true,
     model: "gpt-4.1-mini",
     rows: 24,
     duration: "1.61s",
@@ -574,6 +611,7 @@ const INITIAL_RUNS: RunRecord[] = [
     domainId: SAMPLE_DOMAIN_ID,
     question: "Which studios have the highest average rating?",
     status: "Passed",
+    isDemo: true,
     model: "qwen-plus",
     rows: 12,
     duration: "1.49s",
@@ -621,10 +659,22 @@ function Icon({ value }: { value: string }) {
   );
 }
 
+/**
+ * Live response protocol.
+ *
+ * Business status comes from the payload (never from the HTTP code) and the
+ * result carries live provenance. Missing rows/columns and blocked/failed
+ * statuses produce an empty, explicitly failed result — live failures must
+ * never fall back to demo data.
+ */
 function normalizeQueryResult(payload: Record<string, unknown>): QueryResult {
+  const status = normalizeRunStatus(payload.status);
+  const explanation = String(payload.explanation ?? payload.message ?? "").trim();
+  const detail = extractRunDetail(payload);
+  const planText = extractRunText(payload);
   const columns = Array.isArray(payload.columns)
     ? payload.columns.map(String)
-    : DEMO_RESULT.columns;
+    : [];
   const rows = Array.isArray(payload.rows)
     ? payload.rows.map((row) =>
         Array.isArray(row)
@@ -633,16 +683,139 @@ function normalizeQueryResult(payload: Record<string, unknown>): QueryResult {
             )
           : [],
       )
-    : DEMO_RESULT.rows;
+    : [];
+  const runId = String(payload.run_id ?? payload.runId ?? "").trim();
+
+  const hasRowShape = Array.isArray(payload.rows) || Array.isArray(payload.columns);
+  const failed = isFailureStatus(status) || !hasRowShape;
+  const resolvedStatus: RunStatus = failed
+    ? status === "success"
+      ? "failed"
+      : status
+    : status;
 
   return {
-    status: String(payload.status ?? "success"),
-    runId: String(payload.run_id ?? payload.runId ?? "qf_live"),
-    explanation: String(payload.explanation ?? "Query completed successfully."),
-    sql: String(payload.sql ?? "-- SQL was not included in the response"),
-    columns,
-    rows,
-    rowCount: Number(payload.row_count ?? payload.rowCount ?? rows.length),
+    provenance: "live",
+    mode: "live-request",
+    status: resolvedStatus,
+    runId: runId || "qf_live",
+    explanation:
+      explanation || "Live backend returned no explanation for this run.",
+    planText,
+    detail: detail || (hasRowShape ? "" : "Live response contained no rows or columns."),
+    sql: typeof payload.sql === "string" ? payload.sql : "",
+    columns: failed ? [] : columns,
+    rows: failed ? [] : rows,
+    rowCount: failed
+      ? 0
+      : Number(payload.row_count ?? payload.rowCount ?? rows.length),
+    output: payload,
+  };
+}
+
+/** A live failure or an unavailable backend, always with an honest reason. */
+function liveFailureResult(
+  status: RunStatus,
+  detail: string,
+  output: Record<string, unknown> | null = null,
+  mode: RunMode = "live-request",
+): QueryResult {
+  return {
+    provenance: "live",
+    mode,
+    status,
+    runId: "qf_live",
+    explanation: "",
+    planText: "",
+    detail: detail || "Live request failed without an error detail.",
+    sql: "",
+    columns: [],
+    rows: [],
+    rowCount: 0,
+    output,
+  };
+}
+
+/** Shown in live mode before the first real run: no live evidence yet. */
+const EMPTY_LIVE_RESULT: QueryResult = {
+  provenance: "live",
+  mode: "live-request",
+  status: "planned",
+  runId: "",
+  explanation:
+    "No live result yet. No run has been executed in this session — ask a governed question to produce a real result table.",
+  planText: "",
+  detail: "",
+  sql: "",
+  columns: [],
+  rows: [],
+  rowCount: 0,
+  output: null,
+};
+
+/** The governed request both transports send; the body is not transport-specific. */
+function queryRequestBody(question: string): Record<string, unknown> {
+  return {
+    question,
+    database: "sample_data/anime_streaming/anime_streaming.sqlite",
+    semantic_model_path: "sample_data/anime_streaming/semantic_model.yml",
+    sql_policy_path: "sample_data/anime_streaming/sql_policy.yml",
+    visualize: true,
+    report: true,
+    complexity_mode: "auto",
+  };
+}
+
+/**
+ * Merge the protocol outcome with the payload's own status.
+ *
+ * The terminal outcome is authoritative for *how the run ended*, so a payload
+ * can only make the verdict more specific (a plan-only or blocked answer), never
+ * better: an outcome of `cancelled`/`failed`/`partial` is never upgraded by a
+ * payload that still says `success`.
+ */
+function streamMergeStatus(payloadStatus: RunStatus, outcomeStatus: RunStatus): RunStatus {
+  return outcomeStatus === "success" ? payloadStatus : outcomeStatus;
+}
+
+/**
+ * Turn a consumed stream into a Studio run view.
+ *
+ * Everything here comes from received frames: the outcome from the single
+ * terminal frame, rows/SQL/artifacts from that frame's `result` payload, and the
+ * reason line from `streamRunDetail`. A stream that ended without a terminal
+ * event therefore renders as a failure with the reason "stream ended without a
+ * terminal event" — never as a passed run, and never with demo rows.
+ */
+function streamQueryResult(state: StreamRunState): QueryResult {
+  const terminal = state.terminal;
+  const outcomeStatus = streamRunStatus(state);
+  const payload = terminal?.result ?? null;
+  const base = payload ? normalizeQueryResult(payload) : null;
+  const status = base
+    ? streamMergeStatus(base.status, outcomeStatus)
+    : outcomeStatus;
+  const detail = streamRunDetail(state);
+  const failed = isFailureStatus(status);
+  return {
+    provenance: "live",
+    mode: "live-stream",
+    status,
+    runId: terminal?.runId || state.runId || "qf_live",
+    explanation: failed
+      ? terminal?.message ||
+        base?.explanation ||
+        "The streamed run produced no result table. No demo rows were substituted."
+      : base?.explanation || "Live stream returned a governed result.",
+    planText: base?.planText ?? "",
+    detail: failed ? detail || base?.detail || "" : detail,
+    sql: failed ? "" : base?.sql ?? "",
+    columns: failed ? [] : base?.columns ?? [],
+    rows: failed ? [] : base?.rows ?? [],
+    rowCount: failed ? 0 : base?.rowCount ?? 0,
+    // The streamed facts (frames, tools, artifacts, violations) travel with the
+    // result so the Trust Trace shows what the transport really did.
+    output: { ...(base?.output ?? {}), event_stream: streamEvidence(state) },
   };
 }
 
@@ -654,6 +827,12 @@ export default function Home() {
   const [query, setQuery] = useState(EXAMPLE_QUESTIONS[0]);
   const [isRunning, setIsRunning] = useState(false);
   const [runStage, setRunStage] = useState(0);
+  // Live transport choice: the SSE stream (real frames) or the single-response
+  // request. The non-streaming path stays available and the result is labelled
+  // with the mode that produced it.
+  const [useStreaming, setUseStreaming] = useState(true);
+  const [streamState, setStreamState] = useState<StreamRunState | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [result, setResult] = useState<QueryResult>(DEMO_RESULT);
   const [runs, setRuns] = useState<RunRecord[]>(INITIAL_RUNS);
   const [selectedEntity, setSelectedEntity] = useState("watch_session");
@@ -771,10 +950,9 @@ export default function Home() {
           id: String(run.id),
           domainId: String(run.domain_id ?? SAMPLE_DOMAIN_ID),
           question: String(run.question),
-          status:
-            String(run.status) === "blocked"
-              ? ("Blocked" as const)
-              : ("Passed" as const),
+          // Persisted status is rendered as-is; nothing is upgraded to Passed.
+          status: runRecordStatus(normalizeRunStatus(run.status)),
+          isDemo: run.is_demo === true || run.is_demo === 1,
           model: String(run.model ?? "configured model"),
           rows: Number(run.row_count ?? 0),
           duration: String(run.duration ?? "live"),
@@ -811,6 +989,16 @@ export default function Home() {
   const activeEntity =
     ENTITIES.find((entity) => entity.name === selectedEntity) ?? ENTITIES[0];
 
+  // In live mode the panel never shows sample rows: until a real run completes
+  // the result stays empty instead of backfilling demo data.
+  const displayedResult = useMemo(
+    () =>
+      connection === "live" && result.provenance === "demo"
+        ? EMPTY_LIVE_RESULT
+        : result,
+    [connection, result],
+  );
+
   const filteredRuns = runs.filter(
     (run) =>
       run.domainId === activeDomain.id &&
@@ -822,6 +1010,38 @@ export default function Home() {
   const activeDomainRuns = runs.filter(
     (run) => run.domainId === activeDomain.id,
   );
+
+  /**
+   * Run one live question over the real SSE stream and return the run view.
+   *
+   * Progress comes only from received frames (`consumeAskStream`), the terminal
+   * frame ends the run exactly once, and an abort from the Cancel button reports
+   * `cancelled` instead of a fabricated outcome.
+   */
+  async function runLiveStream(submitted: string): Promise<QueryResult> {
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    setStreamState(initialStreamState());
+    try {
+      const state = await consumeAskStream({
+        url: "/api/queryforge/ask/stream",
+        body: queryRequestBody(submitted),
+        signal: controller.signal,
+        // React needs a fresh object per frame; the consumed state is mutated in
+        // place so the copy also snapshots the frame list.
+        onUpdate: (next) => setStreamState({ ...next, items: [...next.items] }),
+      });
+      setStreamState({ ...state, items: [...state.items] });
+      return streamQueryResult(state);
+    } finally {
+      streamAbortRef.current = null;
+    }
+  }
+
+  function cancelStreamRun() {
+    streamAbortRef.current?.abort();
+    setToast("Cancelling the live stream…");
+  }
 
   async function runQuery(nextQuestion?: string) {
     const submitted = (nextQuestion ?? query).trim();
@@ -839,55 +1059,82 @@ export default function Home() {
     setQuery(submitted);
     setActiveView("ask");
     setIsRunning(true);
-    setRunStage(1);
-    await sleep(350);
-    setRunStage(2);
-    await sleep(420);
-    setRunStage(3);
+    // No synthesized staging: the progress panel follows real request
+    // milestones only (stage 0 = live request in flight, indeterminate). In
+    // stream mode the panel renders received frames instead of these stages.
+    setRunStage(0);
+    setStreamState(initialStreamState());
 
-    let nextResult = DEMO_RESULT;
-    if (connection === "live") {
+    const provenance: Provenance = provenanceOf(
+      connection === "live" ? "live" : "demo",
+    );
+    let nextResult: QueryResult;
+
+    if (provenance === "live" && useStreaming) {
+      nextResult = await runLiveStream(submitted);
+    } else if (provenance === "live") {
+      setRunStage(1);
       try {
         const response = await fetch("/api/queryforge/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            question: submitted,
-            database:
-              "sample_data/anime_streaming/anime_streaming.sqlite",
-            semantic_model_path:
-              "sample_data/anime_streaming/semantic_model.yml",
-            sql_policy_path:
-              "sample_data/anime_streaming/sql_policy.yml",
-            visualize: true,
-            report: true,
-            complexity_mode: "auto",
-          }),
+          body: JSON.stringify(queryRequestBody(submitted)),
         });
-        if (!response.ok) {
-          throw new Error("Live query failed");
+        setRunStage(2);
+        let payload: unknown = null;
+        try {
+          payload = await response.json();
+        } catch {
+          payload = null;
         }
-        nextResult = normalizeQueryResult(await response.json());
-      } catch {
-        setConnection("demo");
-        setToast("Live backend unavailable — continued with demo evidence.");
+        const record =
+          typeof payload === "object" && payload !== null
+            ? (payload as Record<string, unknown>)
+            : null;
+        if (!response.ok) {
+          nextResult = liveFailureResult(
+            "failed",
+            extractRunDetail(record) ||
+              `Live request failed with HTTP ${response.status} ${response.statusText}`.trim(),
+            record,
+          );
+        } else if (!record) {
+          nextResult = liveFailureResult(
+            "failed",
+            "Live response was not valid JSON.",
+          );
+        } else {
+          nextResult = normalizeQueryResult(record);
+        }
+      } catch (error) {
+        // live failures must never fall back to demo: keep live provenance
+        // and surface the real error detail instead.
+        nextResult = liveFailureResult(
+          "failed",
+          error instanceof Error
+            ? `Live request failed: ${error.message}`
+            : "Live request failed: the backend could not be reached.",
+        );
       }
+      setRunStage(3);
     } else {
-      await sleep(460);
+      // Demo is an explicit mode: sample evidence tagged with demo provenance.
+      setRunStage(4);
+      nextResult = { ...DEMO_RESULT, provenance: "demo" };
     }
 
     setRunStage(4);
-    await sleep(300);
     setResult(nextResult);
     setRuns((current) => [
       {
         id: nextResult.runId,
         domainId: activeDomain.id,
         question: submitted,
-        status: "Passed",
-        model: connection === "live" ? "configured model" : "demo-model",
+        status: runRecordStatus(nextResult.status),
+        isDemo: provenance === "demo",
+        model: provenance === "live" ? "configured model" : "demo-model",
         rows: nextResult.rowCount,
-        duration: connection === "live" ? "live" : "1.84s",
+        duration: provenance === "live" ? "live" : "1.84s",
         time: "just now",
       },
       ...current.filter((item) => item.id !== nextResult.runId),
@@ -904,15 +1151,22 @@ export default function Home() {
         id: persistedRunId,
         domainId: activeDomain.id,
         question: submitted,
-        status: "success",
-        model: connection === "live" ? "configured model" : "demo-model",
+        // Real business status, never a "Passed"-style display string.
+        status: persistableRunStatus(nextResult.status),
+        model: provenance === "live" ? "configured model" : "demo-model",
         rowCount: nextResult.rowCount,
-        duration: connection === "live" ? "live" : "1.84s",
-        isDemo: connection !== "live",
+        duration: provenance === "live" ? "live" : "1.84s",
+        isDemo: provenance === "demo",
       }),
     }).catch(() => undefined);
     setIsRunning(false);
-    setToast("Governed query completed.");
+    if (isFailureStatus(nextResult.status)) {
+      setToast(`${statusLabel(nextResult.status)} — ${nextResult.detail}`);
+    } else if (provenance === "demo") {
+      setToast("Demo evidence rendered — this is not a live run.");
+    } else {
+      setToast("Governed query completed.");
+    }
   }
 
   function submitQuery(event: FormEvent) {
@@ -921,7 +1175,7 @@ export default function Home() {
   }
 
   function copySql() {
-    void navigator.clipboard.writeText(result.sql);
+    void navigator.clipboard.writeText(displayedResult.sql);
     setToast("SQL copied to clipboard.");
   }
 
@@ -931,7 +1185,7 @@ export default function Home() {
         JSON.stringify(
           {
             question: query,
-            ...result,
+            ...displayedResult,
           },
           null,
           2,
@@ -942,7 +1196,7 @@ export default function Home() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${result.runId}.json`;
+    anchor.download = `${displayedResult.runId}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
     setToast("Run artifact downloaded.");
@@ -1014,20 +1268,25 @@ export default function Home() {
       }),
     );
 
-    let persisted = false;
+    let publication: ReturnType<typeof publicationOutcome>;
     try {
       const response = await fetch("/api/studio/upload", {
         method: "POST",
         body: payload,
       });
-      persisted = response.ok;
-    } catch {
-      persisted = false;
+      publication = publicationOutcome(await response.json(), response.ok);
+      if (!publication.published) {
+        setToast(publication.detail);
+        return;
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Publication failed. Retry when the backend is available.");
+      return;
     }
 
     setUploadedSources((current) => [
       {
-        id: crypto.randomUUID(),
+        id: publication.sourceId || crypto.randomUUID(),
         domainId: activeDomain.id,
         name:
           uploadFiles.length === 1
@@ -1060,11 +1319,7 @@ export default function Home() {
     setUploadFiles([]);
     setSemanticReviewed(false);
     setSemanticValidated(false);
-    setToast(
-      persisted
-        ? "Data and semantic model published atomically."
-        : "Demo source published locally with its semantic contract.",
-    );
+    setToast(publication.detail);
   }
 
   function selectRun(run: RunRecord) {
@@ -1384,7 +1639,12 @@ export default function Home() {
               runQuery={runQuery}
               isRunning={isRunning}
               runStage={runStage}
-              result={result}
+              streaming={connection === "live" && useStreaming}
+              useStreaming={useStreaming}
+              setUseStreaming={setUseStreaming}
+              streamState={streamState}
+              cancelStreamRun={cancelStreamRun}
+              result={displayedResult}
               copySql={copySql}
               downloadResult={downloadResult}
               runs={activeDomainRuns.slice(0, 4)}
@@ -1395,6 +1655,7 @@ export default function Home() {
           {activeView === "runs" && (
             <RunsView
               runs={filteredRuns}
+              allRuns={activeDomainRuns}
               filter={runFilter}
               setFilter={setRunFilter}
               selectRun={selectRun}
@@ -1924,6 +2185,7 @@ function OverviewView({
                   <strong>{run.question}</strong>
                   <small>
                     {run.id} · {run.model}
+                    {run.isDemo ? " · DEMO" : ""}
                   </small>
                 </span>
                 <span className="activity-meta">
@@ -2758,6 +3020,44 @@ function SemanticView({
   );
 }
 
+/**
+ * Frame-derived evidence of a streamed run.
+ *
+ * Every number is read from the consumed stream: the frame count, the tool and
+ * artifact names seen in frames, the single terminal frame's outcome and
+ * sequence, and the usage/latency summary that terminal frame carried. A stream
+ * that produced no frames renders nothing, and a stream with no terminal frame
+ * says so instead of reporting an outcome.
+ */
+function StreamEvidenceLine({ state }: { state: StreamRunState | null }) {
+  if (!state || state.framesReceived === 0) return null;
+  const usage = streamObservability(state);
+  const terminal = state.terminal;
+  return (
+    <p
+      className="answer-detail"
+      data-observability="terminal-frame"
+      data-terminal-outcome={terminal?.outcome ?? (terminal ? "unknown" : "none")}
+    >
+      Event stream: {state.framesReceived} frame(s),{" "}
+      {terminal
+        ? `terminal outcome ${outcomeLabel(terminal.outcome)} (sequence ${terminal.sequence})`
+        : "no terminal frame received"}{" "}
+      · {state.tools.length} tool name(s), {state.artifacts.length} artifact type(s)
+      {usage
+        ? ` · ${usage.modelCalls ?? 0} model call(s), ${usage.totalTokens ?? 0} token(s)`
+        : " · no usage summary in the terminal frame"}
+      {usage?.estimated ? " (partly estimated)" : ""}
+      {usage && usage.endToEndMs !== null
+        ? ` · end-to-end ${usage.endToEndMs} ms`
+        : ""}
+      {usage && !usage.priceTableConfigured
+        ? " · cost not reported (no price table)"
+        : ""}
+    </p>
+  );
+}
+
 function AskView({
   domain,
   hasSources,
@@ -2767,6 +3067,11 @@ function AskView({
   runQuery,
   isRunning,
   runStage,
+  streaming,
+  useStreaming,
+  setUseStreaming,
+  streamState,
+  cancelStreamRun,
   result,
   copySql,
   downloadResult,
@@ -2782,6 +3087,12 @@ function AskView({
   runQuery: (value?: string) => Promise<void>;
   isRunning: boolean;
   runStage: number;
+  /** True when the live transport in flight is the real SSE stream. */
+  streaming: boolean;
+  useStreaming: boolean;
+  setUseStreaming: (value: boolean) => void;
+  streamState: StreamRunState | null;
+  cancelStreamRun: () => void;
   result: QueryResult;
   copySql: () => void;
   downloadResult: () => void;
@@ -2845,6 +3156,10 @@ function AskView({
     1,
   );
 
+  // Trust Trace is rebuilt from the real backend artifacts of this run.
+  const trustTrace = buildTrustTrace(result.output, result.provenance);
+  const evidenceCount = trustEvidenceCount(trustTrace);
+
   return (
     <div className="ask-workspace">
       <aside className="conversation-rail">
@@ -2861,7 +3176,7 @@ function AskView({
             <span>✦</span>
             <span>
               <strong>{run.question}</strong>
-              <small>{run.time}</small>
+              <small>{run.isDemo ? `${run.time} · DEMO` : run.time}</small>
             </span>
           </button>
         ))}
@@ -2906,6 +3221,26 @@ function AskView({
             <span className="option-chip">{domain.name}</span>
             <span className="option-chip">Auto complexity</span>
             <span className="option-chip">Report on</span>
+            {connection === "live" && (
+              <button
+                type="button"
+                className={cn(
+                  "option-chip option-chip-button",
+                  useStreaming && "active",
+                )}
+                aria-pressed={useStreaming}
+                data-transport={useStreaming ? "stream" : "request"}
+                title={
+                  useStreaming
+                    ? "Live runs consume the real /ask/stream event protocol (SSE)."
+                    : "Live runs use the single-response /ask request."
+                }
+                onClick={() => setUseStreaming(!useStreaming)}
+                disabled={isRunning}
+              >
+                {useStreaming ? "SSE progress" : "Single response"}
+              </button>
+            )}
           </div>
           <button type="submit" disabled={isRunning || !query.trim()}>
             {isRunning ? "Running…" : "Run"}
@@ -2922,79 +3257,263 @@ function AskView({
         </div>
 
         {isRunning ? (
-          <div className="run-progress-panel">
-            <div className="run-progress-orb">QF</div>
-            <h2>Building a governed answer</h2>
-            <p>Every stage produces evidence before SQL can execute.</p>
-            <div className="run-stage-list">
-              {[
-                ["Resolve semantics", "Matched metrics, entities and grain"],
-                ["Plan Join Paths", "Selected reviewed relationships"],
-                ["Govern SQL", "AST policy and bounded preview"],
-                ["Validate answer", "Result quality and report artifacts"],
-              ].map(([label, detail], index) => {
-                const number = index + 1;
-                return (
-                  <div
-                    className={cn(
-                      "run-stage",
-                      runStage === number && "active",
-                      runStage > number && "complete",
-                    )}
-                    key={label}
-                  >
-                    <span>{runStage > number ? "✓" : number}</span>
-                    <div>
-                      <strong>{label}</strong>
-                      <small>{detail}</small>
+          streaming ? (
+            <div
+              className="run-progress-panel"
+              data-progress="stream"
+              data-event-protocol={EVENT_PROTOCOL_VERSION}
+              data-stream-status={streamState?.status ?? "streaming"}
+            >
+              <div className="run-progress-orb">QF</div>
+              <h2>Streaming a governed answer</h2>
+              <p>
+                Live frames from <code>POST /ask/stream</code> (event protocol v
+                {EVENT_PROTOCOL_VERSION}
+                {streamState?.headerProtocolVersion
+                  ? `, header v${streamState.headerProtocolVersion}`
+                  : ""}
+                ). Every item below comes from a received frame — no progress is
+                simulated.
+              </p>
+              <div className="run-frame-list">
+                {streamState && streamState.items.length ? (
+                  streamState.items.map((item) => (
+                    <div
+                      className="run-frame"
+                      key={item.eventId || `${item.sequence}-${item.eventType}`}
+                      data-event-type={item.eventType}
+                      data-sequence={item.sequence}
+                    >
+                      <span>{item.sequence}</span>
+                      <div>
+                        <strong>{item.label}</strong>
+                        <small>
+                          {item.detail ||
+                            `frame ${item.eventId || item.sequence}`}
+                        </small>
+                      </div>
                     </div>
-                    {runStage === number && <i />}
+                  ))
+                ) : (
+                  <div className="run-frame-empty" data-frame-count="0">
+                    Waiting for the first frame — nothing is rendered until the
+                    stream sends one.
                   </div>
-                );
-              })}
+                )}
+              </div>
+              <div className="run-frame-foot">
+                <span data-frame-count={streamState?.framesReceived ?? 0}>
+                  {streamState?.framesReceived ?? 0} frame(s) received
+                  {streamState?.runId ? ` · ${streamState.runId}` : ""}
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  data-action="cancel-run"
+                  onClick={cancelStreamRun}
+                >
+                  ✕ Cancel run
+                </button>
+              </div>
+              {streamState?.droppedProgressSuspected ? (
+                <p className="run-frame-note" role="status" data-note="dropped">
+                  Progress frames were dropped by stream backpressure (
+                  {streamState.sequenceGaps} sequence gap(s)). The terminal event
+                  is never dropped.
+                </p>
+              ) : null}
+              {streamState?.violations.length ? (
+                <p className="run-frame-note danger" role="status" data-note="violations">
+                  Protocol violation: {streamState.violations.join(", ")}
+                </p>
+              ) : null}
             </div>
-          </div>
+          ) : (
+            <div
+              className="run-progress-panel"
+              data-progress={runStage === 0 ? "indeterminate" : "milestones"}
+            >
+              <div className="run-progress-orb">QF</div>
+              <h2>Building a governed answer</h2>
+              <p>
+                {connection === "live"
+                  ? "Running (live request)… stages advance on real request milestones."
+                  : "Preparing demo evidence — this is not a live run."}
+              </p>
+              <div className="run-stage-list">
+                {[
+                  ["Resolve semantics", "Matched metrics, entities and grain"],
+                  ["Plan Join Paths", "Selected reviewed relationships"],
+                  ["Govern SQL", "AST policy and bounded preview"],
+                  ["Validate answer", "Result quality and report artifacts"],
+                ].map(([label, detail], index) => {
+                  const number = index + 1;
+                  return (
+                    <div
+                      className={cn(
+                        "run-stage",
+                        runStage === number && "active",
+                        runStage > number && "complete",
+                      )}
+                      key={label}
+                    >
+                      <span>{runStage > number ? "✓" : number}</span>
+                      <div>
+                        <strong>{label}</strong>
+                        <small>{detail}</small>
+                      </div>
+                      {runStage === number && <i />}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )
         ) : (
           <>
-            <article className="answer-card">
-              <div className="answer-avatar">QF</div>
-              <div className="answer-content">
-                <div className="answer-meta">
-                  <strong>QueryForge</strong>
-                  <span className="status-pill success">GOVERNED</span>
-                  <small>{result.runId}</small>
+            {isFailureStatus(result.status) ? (
+              <article
+                className="answer-card answer-card-failure"
+                data-status={result.status}
+                data-provenance={result.provenance}
+              >
+                <div className="answer-avatar">QF</div>
+                <div className="answer-content">
+                  <div className="answer-meta">
+                    <strong>QueryForge</strong>
+                    <span
+                      className={cn(
+                        "status-pill",
+                        result.status === "failed" || result.status === "cancelled"
+                          ? "danger"
+                          : "neutral",
+                      )}
+                      data-run-status={result.status}
+                    >
+                      {result.runId
+                        ? statusLabel(result.status).toUpperCase()
+                        : "NO LIVE RUN YET"}
+                    </span>
+                    <span className="status-pill neutral" data-provenance="live">
+                      LIVE
+                    </span>
+                    {result.runId ? (
+                      <span
+                        className="status-pill neutral"
+                        data-run-mode={result.mode}
+                        title={`Result produced by: ${runModeLabel(result.mode)}`}
+                      >
+                        {runModeLabel(result.mode).toUpperCase()}
+                      </span>
+                    ) : null}
+                    <small>{result.runId}</small>
+                  </div>
+                  <p>
+                    {result.explanation
+                      ? result.explanation
+                      : "This run produced no result table. No demo rows were substituted."}
+                  </p>
+                  {result.detail ? (
+                    <p className="answer-detail" role="status">
+                      {result.detail}
+                    </p>
+                  ) : null}
+                  {result.mode === "live-stream" ? (
+                    <StreamEvidenceLine state={streamState} />
+                  ) : null}
+                  {result.planText ? (
+                    <pre className="answer-plan">
+                      <code>{result.planText}</code>
+                    </pre>
+                  ) : null}
+                  {result.sql ? (
+                    <pre className="answer-plan">
+                      <code>{result.sql}</code>
+                    </pre>
+                  ) : null}
+                  <div className="answer-actions">
+                    <button
+                      className="secondary-button"
+                      onClick={() => void runQuery()}
+                      disabled={isRunning}
+                    >
+                      ↻ Retry live run
+                    </button>
+                  </div>
                 </div>
-                <p>{result.explanation}</p>
-                <div className="answer-highlights">
-                  <div>
-                    <span>Top genre</span>
-                    <strong>{String(result.rows[0]?.[0] ?? "Fantasy")}</strong>
+              </article>
+            ) : (
+              <>
+                <article className="answer-card">
+                  <div className="answer-avatar">QF</div>
+                  <div className="answer-content">
+                    <div className="answer-meta">
+                      <strong>QueryForge</strong>
+                      <span className="status-pill success">GOVERNED</span>
+                      {result.provenance === "demo" ? (
+                        <span
+                          className="status-pill demo"
+                          data-provenance="demo"
+                          title="Sample evidence, not produced by a live run"
+                        >
+                          DEMO
+                        </span>
+                      ) : null}
+                      {result.runId ? (
+                        <span
+                          className="status-pill neutral"
+                          data-run-mode={result.mode}
+                          title={`Result produced by: ${runModeLabel(result.mode)}`}
+                        >
+                          {runModeLabel(result.mode).toUpperCase()}
+                        </span>
+                      ) : null}
+                      <small>{result.runId}</small>
+                    </div>
+                    <p>{result.explanation}</p>
+                    {result.mode === "live-stream" ? (
+                      <StreamEvidenceLine state={streamState} />
+                    ) : null}
+                    <div className="answer-highlights">
+                      <div>
+                        <span>{result.columns[0] ?? "Column 1"}</span>
+                        <strong>{String(result.rows[0]?.[0] ?? "—")}</strong>
+                      </div>
+                      <div>
+                        <span>{result.columns[1] ?? "Column 2"}</span>
+                        <strong>
+                          {typeof result.rows[0]?.[1] === "number"
+                            ? (result.rows[0][1] as number).toLocaleString()
+                            : String(result.rows[0]?.[1] ?? "—")}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>{result.columns[2] ?? "Column 3"}</span>
+                        <strong>
+                          {result.rows.length &&
+                          result.rows.every(
+                            (row) => typeof row[2] === "number",
+                          )
+                            ? Math.max(
+                                ...result.rows.map((row) => Number(row[2]) || 0),
+                              ).toLocaleString()
+                            : "—"}
+                        </strong>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span>Watch hours</span>
-                    <strong>
-                      {Number(result.rows[0]?.[1] ?? 0).toLocaleString()}
-                    </strong>
-                  </div>
-                  <div>
-                    <span>Best completion</span>
-                    <strong>
-                      {Math.max(
-                        ...result.rows.map((row) => Number(row[2]) || 0),
-                      ).toFixed(1)}
-                      %
-                    </strong>
-                  </div>
-                </div>
-              </div>
-            </article>
+                </article>
 
+            {result.rows.length ? (
             <div className="result-grid">
               <section className="panel result-chart-panel">
                 <div className="panel-heading">
                   <div>
                     <span className="panel-kicker">RESULT VISUALIZATION</span>
-                    <h2>Watch hours by genre</h2>
+                    <h2>
+                      {result.columns[1] ?? "Value"} by{" "}
+                      {result.columns[0] ?? "category"}
+                    </h2>
                   </div>
                   <div className="segmented small">
                     <button className="active">Bar</button>
@@ -3017,9 +3536,13 @@ function AskView({
                 </div>
                 <div className="chart-footnote">
                   <span>
-                    <i className="legend-primary" /> Watch hours
+                    <i className="legend-primary" /> {result.columns[1] ?? "Value"}
                   </span>
-                  <span>Valid sessions only · Rounded to 1 decimal</span>
+                  <span>
+                    {result.provenance === "demo"
+                      ? "Demo sample data — not a live run"
+                      : `${result.rowCount} rows returned by the live run`}
+                  </span>
                 </div>
               </section>
 
@@ -3034,15 +3557,18 @@ function AskView({
                   </button>
                 </div>
                 <pre>
-                  <code>{result.sql}</code>
+                  <code>{result.sql || "-- no SQL returned"}</code>
                 </pre>
               </section>
             </div>
+            ) : null}
 
             <section className="panel result-table-panel">
               <div className="panel-heading">
                 <div>
-                  <span className="panel-kicker">REVIEWED ROWS</span>
+                  <span className="panel-kicker">
+                    {result.provenance === "demo" ? "DEMO ROWS" : "REVIEWED ROWS"}
+                  </span>
                   <h2>Query result</h2>
                 </div>
                 <span className="row-count">{result.rowCount} rows</span>
@@ -3070,8 +3596,16 @@ function AskView({
                     ))}
                   </tbody>
                 </table>
+                {result.rows.length ? null : (
+                  <p className="result-empty-note">
+                    Empty result set returned by the live run — no demo rows
+                    were substituted.
+                  </p>
+                )}
               </div>
             </section>
+              </>
+            )}
           </>
         )}
       </section>
@@ -3080,75 +3614,109 @@ function AskView({
         <div className="trust-heading">
           <div>
             <span className="panel-kicker">TRUST TRACE</span>
-            <strong>Why this answer is safe</strong>
+            <strong>
+              {result.provenance === "demo"
+                ? "Sample walkthrough"
+                : "Why this answer is safe"}
+            </strong>
           </div>
-          <span className="trust-score">100</span>
+          <span
+            className={cn("trust-score", result.provenance === "demo" && "demo")}
+            data-provenance={result.provenance}
+            title={
+              result.provenance === "demo"
+                ? "Demo evidence — not from a live run"
+                : `${evidenceCount} of ${trustTrace.rows.length} checks backed by run artifacts`
+            }
+          >
+            {result.provenance === "demo"
+              ? "DEMO"
+              : `${evidenceCount}/${trustTrace.rows.length}`}
+          </span>
         </div>
-        <div className="trust-section">
-          <span className="trust-section-label">SEMANTIC MATCH</span>
-          <div className="trust-card">
-            <span className="trust-card-icon metric">ƒ</span>
-            <div>
-              <strong>watch_hours</strong>
-              <small>SUM · watch_session</small>
+
+        {result.provenance === "demo" ? (
+          <>
+            <div className="trust-note demo" data-provenance="demo">
+              <span>◇</span>
+              <p>
+                {DEMO_TRUST_NOTICE}
+                <small>
+                  Sample copy only — every score below is unevaluated.
+                </small>
+              </p>
             </div>
-            <span>99%</span>
-          </div>
-          <div className="trust-card">
-            <span className="trust-card-icon metric">%</span>
-            <div>
-              <strong>completion_rate</strong>
-              <small>RATIO · watch_session</small>
+            <div className="trust-section">
+              <span className="trust-section-label">DEMO EVIDENCE</span>
+              {trustTrace.rows.map((row) => (
+                <div
+                  className="policy-check unevidenced"
+                  key={row.label}
+                  data-evidence={row.evidence}
+                >
+                  <span>○</span>
+                  <strong>{row.label}</strong>
+                  <small>{row.value}</small>
+                </div>
+              ))}
             </div>
-            <span>98%</span>
-          </div>
-        </div>
-        <div className="trust-section">
-          <span className="trust-section-label">JOIN PATH</span>
-          <div className="mini-path">
-            <span>Watch</span>
-            <i>→</i>
-            <span>Episode</span>
-            <i>→</i>
-            <span>Anime</span>
-          </div>
-          <div className="trust-note success">
-            <span>✓</span>
-            <p>
-              Reviewed path
-              <small>No fan-out risk detected</small>
-            </p>
-          </div>
-        </div>
-        <div className="trust-section">
-          <span className="trust-section-label">SQL POLICY</span>
-          {[
-            ["Read-only AST", "Passed"],
-            ["Table scope", "Passed"],
-            ["Join budget", "4 / 5"],
-            ["Result limit", "6 / 500"],
-            ["Sensitive columns", "None"],
-          ].map(([label, value]) => (
-            <div className="policy-check" key={label}>
-              <span>✓</span>
-              <strong>{label}</strong>
-              <small>{value}</small>
+            <div className="trust-section">
+              <span className="trust-section-label">JOIN PATH · SAMPLE</span>
+              <div className="mini-path">
+                <span>Watch</span>
+                <i>→</i>
+                <span>Episode</span>
+                <i>→</i>
+                <span>Anime</span>
+              </div>
+              <div className="trust-note demo" data-provenance="demo">
+                <span>◇</span>
+                <p>
+                  Sample path
+                  <small>Not verified against a live run</small>
+                </p>
+              </div>
             </div>
-          ))}
-        </div>
-        <div className="trust-section">
-          <span className="trust-section-label">QUALITY</span>
-          <div className="quality-score">
-            <div>
-              <strong>96</strong>
-              <span>/100</span>
+            <div className="trust-section">
+              <span className="trust-section-label">QUALITY · SAMPLE</span>
+              <div className="quality-score">
+                <div>
+                  <strong>96</strong>
+                  <span>/100</span>
+                </div>
+                <p>
+                  Sample result quality
+                  <small>Demo copy — no live evaluation was performed</small>
+                </p>
+              </div>
             </div>
-            <p>
-              Result quality
-              <small>Grain, nulls and reconciliation passed</small>
-            </p>
+          </>
+        ) : (
+          <div className="trust-section">
+            <span className="trust-section-label">RUN EVIDENCE</span>
+            {trustTrace.rows.map((row) => (
+              <div
+                className={cn("policy-check", !row.evidence && "unevidenced")}
+                key={row.label}
+                data-evidence={row.evidence}
+              >
+                <span>{row.evidence ? "✓" : "○"}</span>
+                <strong>{row.label}</strong>
+                <small>{row.value}</small>
+              </div>
+            ))}
+            {evidenceCount === 0 ? (
+              <div className="trust-note neutral">
+                <span>○</span>
+                <p>
+                  Not evaluated
+                  <small>This run returned no policy, reflection or delivery
+                    artifacts.</small>
+                </p>
+              </div>
+            ) : null}
           </div>
-        </div>
+        )}
         <button className="trace-download" onClick={downloadResult}>
           ↓ Download complete run artifact
         </button>
@@ -3159,17 +3727,37 @@ function AskView({
 
 function RunsView({
   runs,
+  allRuns,
   filter,
   setFilter,
   selectRun,
   downloadResult,
 }: {
   runs: RunRecord[];
+  /** All runs of the active domain, unfiltered, for the honest summary. */
+  allRuns: RunRecord[];
   filter: "All" | "Passed" | "Blocked";
   setFilter: (filter: "All" | "Passed" | "Blocked") => void;
   selectRun: (run: RunRecord) => void;
   downloadResult: () => void;
 }) {
+  const passed = allRuns.filter((run) => run.status === "Passed").length;
+  const blocked = allRuns.filter((run) => run.status === "Blocked").length;
+  // Summary is computed from stored runs; nothing is scaled up or estimated.
+  const summary: Array<[string, string, string]> = [
+    [
+      "Runs on record",
+      String(allRuns.length),
+      `${allRuns.filter((run) => run.isDemo).length} labelled demo`,
+    ],
+    [
+      "Pass rate",
+      allRuns.length ? `${((passed / allRuns.length) * 100).toFixed(1)}%` : "—",
+      `${passed} success of ${allRuns.length}`,
+    ],
+    ["Policy blocks", String(blocked), "Non-success runs kept as-is"],
+    ["Median latency", "—", "Not measured server-side yet"],
+  ];
   return (
     <div className="page">
       <PageHeader
@@ -3184,12 +3772,7 @@ function RunsView({
       />
 
       <div className="run-summary-grid">
-        {[
-          ["Total runs", "128", "Last 30 days"],
-          ["Pass rate", "96.1%", "+2.4%"],
-          ["Policy blocks", "5", "Expected denials"],
-          ["Median latency", "1.72s", "−180ms"],
-        ].map(([label, value, detail]) => (
+        {summary.map(([label, value, detail]) => (
           <div className="run-summary-card" key={label}>
             <span>{label}</span>
             <strong>{value}</strong>
@@ -3237,11 +3820,22 @@ function RunsView({
                 <span
                   className={cn(
                     "status-pill",
-                    run.status === "Passed" ? "success" : "danger",
+                    run.status === "Passed"
+                      ? "success"
+                      : run.status === "Failed" ||
+                          run.status === "Blocked" ||
+                          run.status === "Cancelled"
+                        ? "danger"
+                        : "neutral",
                   )}
                 >
                   {run.status}
                 </span>
+                {run.isDemo ? (
+                  <span className="status-pill neutral" data-provenance="demo">
+                    DEMO
+                  </span>
+                ) : null}
               </span>
               <span className="run-question-cell">
                 <strong>{run.question}</strong>

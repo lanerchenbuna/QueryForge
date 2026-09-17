@@ -137,6 +137,41 @@ class ParallelCandidatesTest(unittest.TestCase):
             "not_available_pre_selection",
         )
 
+    def test_deterministic_candidate_competes_with_three_generated_ones(self):
+        """Regression: the preview ceiling was 3 while the deterministic
+        QuerySpec candidate is appended as the 4th.
+
+        It was therefore ``not_previewed`` with score 0.0 exactly when it
+        competed — the one candidate that cannot invent a column could never
+        win — and with three unusable generated candidates the selection had no
+        eligible candidate at all.
+        """
+
+        self.assertGreaterEqual(
+            SQLSelector.MAX_PREVIEW, ParallelCandidatesNode.MAX_CANDIDATES + 1
+        )
+        selector = ParallelCandidatesNode(
+            object(), self.tool(), candidate_count=3
+        )._selector_for(4)
+        self.assertEqual(selector.max_preview, 4)
+        selection = selector.select(
+            [
+                {"sql": "SELECT missing FROM items"},
+                {"sql": "SELECT missing_2 FROM items"},
+                {"sql": "SELECT missing_3 FROM items"},
+                {"sql": "SELECT COUNT(*) AS n FROM items LIMIT 5"},
+            ],
+            self.context(),
+        )
+        evaluations = selection["evaluations"]
+        self.assertEqual(
+            [evaluation["status"] for evaluation in evaluations],
+            ["rejected", "rejected", "rejected", "eligible"],
+        )
+        self.assertEqual(selection["selected_index"], 3)
+        self.assertGreater(evaluations[3]["score"], 0.0)
+        self.assertTrue(evaluations[3]["execution_success"])
+
     def test_selector_tie_is_deterministic_and_preview_budget_is_bounded(self):
         selector = SQLSelector(self.tool(), max_preview=1, preview_limit=1)
         result = selector.select(

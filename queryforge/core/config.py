@@ -17,6 +17,7 @@ PACKAGED_MODELS_CONFIG = Path(__file__).with_name("default_models.yml")
 DEFAULT_DATABASE_PATH = "sample_data/anime_streaming/anime_streaming.sqlite"
 DEFAULT_HISTORY_DB_PATH = ".queryforge/history.db"
 DEFAULT_VECTOR_KB_PATH = ".queryforge/lancedb"
+DEFAULT_DOMAIN_REGISTRY_PATH = ".queryforge/domains/registry.json"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_ORCHESTRATION_STATE_ROOT = ".queryforge/runs"
 
@@ -73,6 +74,9 @@ class Config:
     mcp_session_enabled: bool = True
     mcp_history_limit: int = 20
     sql_policy_path: str | None = None
+    # Server-side registry of published data domains; a request may name a
+    # domain_id instead of shipping raw database/semantic/policy paths.
+    domain_registry_path: str = DEFAULT_DOMAIN_REGISTRY_PATH
     orchestration_state_root: str = DEFAULT_ORCHESTRATION_STATE_ROOT
     # Transport hardening for network deployments (REST/Gateway/MCP).
     api_key: str | None = None
@@ -228,6 +232,10 @@ def load_config(
             os.getenv("MCP_HISTORY_LIMIT"), default=20, minimum=1
         ),
         sql_policy_path=_optional_string(os.getenv("SQL_SECURITY_POLICY_PATH")),
+        domain_registry_path=(
+            _optional_string(os.getenv("DOMAIN_REGISTRY_PATH"))
+            or DEFAULT_DOMAIN_REGISTRY_PATH
+        ),
         orchestration_state_root=os.getenv(
             "ORCHESTRATION_STATE_ROOT", DEFAULT_ORCHESTRATION_STATE_ROOT
         ),

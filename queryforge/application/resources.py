@@ -11,7 +11,7 @@ from queryforge.core.config import Config, list_model_definitions
 from queryforge.domain.security import load_sql_policy
 from queryforge.domain.semantic import SemanticModelContext, SemanticModelLoader, SubjectTreeLoader
 from queryforge.domain.skills import SkillRegistry
-from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
+from queryforge.infrastructure.db.adapters import open_database as SQLiteConnector
 from queryforge.infrastructure.storage import SQLHistoryStore
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 from queryforge.interfaces.transport_security import (

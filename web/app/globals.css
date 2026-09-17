@@ -5481,6 +5481,231 @@ kbd {
   font-size: 7px;
 }
 
+/* Provenance and honest failure states (step 01) */
+.status-pill.demo,
+.status-pill[data-provenance="demo"] {
+  border-color: rgba(255, 196, 116, 0.3);
+  background: rgba(255, 196, 116, 0.08);
+  color: #ffc474;
+}
+
+.trust-score.demo {
+  width: auto;
+  min-width: 35px;
+  padding: 0 6px;
+  border-color: rgba(255, 196, 116, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 196, 116, 0.08);
+  color: #ffc474;
+  font-size: 8px;
+}
+
+.trust-note.demo {
+  border-color: rgba(255, 196, 116, 0.24);
+  background: rgba(255, 196, 116, 0.05);
+  color: #ffc474;
+}
+
+.trust-note.demo small {
+  color: #9b8a72;
+}
+
+.trust-note.neutral {
+  border-color: #343c44;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-soft);
+}
+
+.policy-check.unevidenced > span {
+  color: #7c857f;
+}
+
+.policy-check.unevidenced small {
+  color: #6b736d;
+}
+
+.answer-card-failure .answer-detail {
+  border: 1px solid rgba(255, 116, 116, 0.22);
+  border-radius: 7px;
+  background: rgba(255, 116, 116, 0.06);
+  color: #ffb0b0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  padding: 8px;
+}
+
+.answer-plan {
+  overflow-x: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 8px;
+  margin: 8px 0 0;
+  padding: 8px;
+}
+
+.answer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.result-empty-note {
+  color: var(--muted);
+  font-size: 8px;
+  padding: 10px 2px;
+}
+
+.run-progress-panel[data-progress="indeterminate"] .run-stage-list {
+  opacity: 0.55;
+}
+
+/* Real SSE progress: one row per received frame, nothing simulated. */
+.run-progress-panel[data-progress="stream"] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  padding: 32px 28px;
+  text-align: left;
+}
+
+.run-progress-panel[data-progress="stream"] .run-progress-orb {
+  align-self: center;
+}
+
+.run-progress-panel[data-progress="stream"] h2 {
+  text-align: center;
+}
+
+.run-progress-panel[data-progress="stream"] > p {
+  text-align: center;
+  line-height: 1.5;
+}
+
+.run-progress-panel[data-progress="stream"] > p code {
+  color: var(--lime);
+  font-size: 8px;
+}
+
+.run-frame-list {
+  display: flex;
+  width: min(620px, 100%);
+  align-self: center;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 22px;
+}
+
+.run-frame {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 7px 9px;
+}
+
+.run-frame > span {
+  display: grid;
+  height: 22px;
+  place-items: center;
+  border: 1px solid #313a42;
+  border-radius: 50%;
+  color: var(--lime);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 7px;
+}
+
+.run-frame > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.run-frame strong {
+  color: var(--text-soft);
+  font-size: 8px;
+}
+
+.run-frame small {
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.4;
+}
+
+.run-frame-empty {
+  border: 1px dashed var(--border-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 8px;
+  padding: 14px;
+  text-align: center;
+}
+
+.run-frame-foot {
+  display: flex;
+  width: min(620px, 100%);
+  align-self: center;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.run-frame-foot > span {
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 7px;
+}
+
+.run-frame-note {
+  width: min(620px, 100%);
+  align-self: center;
+  border-left: 2px solid rgba(183, 244, 61, 0.45);
+  color: var(--muted);
+  font-size: 7px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding-left: 8px;
+}
+
+.run-frame-note.danger {
+  border-left-color: #d4604a;
+  color: #e2a094;
+}
+
+.option-chip-button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.option-chip-button.active {
+  border-color: rgba(183, 244, 61, 0.42);
+  background: #151d0d;
+  color: var(--lime);
+}
+
+.option-chip-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+@media (max-width: 760px) {
+  .run-frame-list {
+    max-height: 260px;
+  }
+
+  .run-frame-foot {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 @media (max-width: 1100px) {
   .domain-hero,
   .semantic-builder {

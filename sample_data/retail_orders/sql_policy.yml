@@ -1,0 +1,26 @@
+version: 1
+name: retail_orders_analyst
+
+allowed_tables:
+  - dim_date
+  - dim_store
+  - dim_product
+  - dim_customer
+  - fact_order
+  - fact_order_item
+
+# Customer contact data (name and e-mail) is withheld while every analytical
+# customer attribute (loyalty tier, home region, signup date) stays available.
+allowed_columns:
+  dim_customer:
+    - customer_id
+    - loyalty_tier
+    - signup_date_key
+    - home_region
+
+dangerous_functions: [randomblob]
+require_limit: false
+max_limit: 1000
+max_tables: 8
+max_joins: 7
+allow_cross_join: false

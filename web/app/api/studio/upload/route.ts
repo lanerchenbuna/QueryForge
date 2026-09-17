@@ -157,6 +157,38 @@ async function validateCsvAgainstContract(
   return [...missing];
 }
 
+type PythonPublishStatus = {
+  status: "not_attempted" | "published" | "failed";
+  detail?: string;
+  data_version?: string;
+};
+
+/**
+ * Map the Studio semantic contract to the Python PublishService contract.
+ * Studio fields grain/primaryKey are single strings and dimensions carry only
+ * names, so the column is assumed to equal the dimension name (documented
+ * limitation of the browser-side contract).
+ */
+function toPythonContract(
+  contract: UploadedSemanticContract,
+  reviewedBy: string,
+) {
+  return {
+    entity: contract.entity,
+    description: contract.description,
+    owner: contract.owner,
+    reviewed_by: reviewedBy,
+    sensitivity: contract.sensitivity,
+    grain: [contract.grain],
+    primaryKey: [contract.primaryKey],
+    dimensions: contract.dimensions.map((dimension) => ({
+      name: dimension,
+      column: dimension,
+    })),
+    metrics: contract.metrics,
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const { response } = requireStudioUser(request);
@@ -339,14 +371,73 @@ export async function POST(request: Request) {
       allHeadersPass && form.get("reviewed") === "true"
         ? "reviewed"
         : "review_pending";
-    const sourceStatus =
-      contractStatus === "reviewed" ? "ready" : "awaiting_validation";
-    const semanticModel = {
+    let sourceStatus = "awaiting_validation";
+    const semanticModel: Record<string, unknown> = {
       ...semanticContract,
       domain: { id: domainId, name: domain.name },
       review: { claimed: form.get("reviewed") === "true", reviewed_by: reviewedBy },
       validation: { files: fileValidations },
     };
+
+    // Step 03: best-effort forward to the Python publish pipeline so the
+    // domain becomes genuinely queryable. The R2/D1 metadata write above
+    // stays authoritative for Studio bookkeeping; this result is reported
+    // honestly and never fabricates a pass.
+    let pythonPublish: PythonPublishStatus = { status: "not_attempted" };
+    const apiUrl = process.env.QUERYFORGE_API_URL;
+    if (apiUrl && contractStatus === "reviewed") {
+      try {
+        const forward = new FormData();
+        forward.set(
+          "contract",
+          JSON.stringify(toPythonContract(semanticContract, reviewedBy)),
+        );
+        for (const file of files) {
+          forward.append("files", file, safeFileName(file.name));
+        }
+        const upstream = await fetch(
+          `${apiUrl.replace(/\/+$/, "")}/domains/${domainId}/publish`,
+          {
+            method: "POST",
+            headers: {
+              authorization: request.headers.get("authorization") ?? "",
+              "x-api-key": request.headers.get("x-api-key") ?? "",
+            },
+            body: forward,
+            signal: AbortSignal.timeout(120_000),
+          },
+        );
+        type PublishPayload = {
+          domain?: { data_version?: string };
+          detail?: string;
+        };
+        const payload = (await upstream.json().catch(() => null)) as
+          | PublishPayload
+          | null;
+        if (upstream.ok && payload?.domain?.data_version) {
+          pythonPublish = {
+            status: "published",
+            data_version: String(payload.domain.data_version ?? ""),
+          };
+        } else {
+          pythonPublish = {
+            status: "failed",
+            detail:
+              payload && payload.detail
+                ? String(payload.detail)
+                : `publish upstream returned ${upstream.status}`,
+          };
+        }
+      } catch (error) {
+        pythonPublish = {
+          status: "failed",
+          detail:
+            error instanceof Error ? error.message : "publish request failed",
+        };
+      }
+    }
+    semanticModel.pythonPublish = pythonPublish;
+    sourceStatus = pythonPublish.status === "published" ? "ready" : "publish_failed";
 
     await db
       .prepare(
@@ -370,8 +461,15 @@ export async function POST(request: Request) {
       )
       .run();
 
+    if (pythonPublish.status === "published") {
+      await db.prepare("UPDATE studio_domains SET status = 'ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .bind(domainId).run();
+    }
     return Response.json(
       {
+        detail: pythonPublish.status === "published" ? undefined
+          : pythonPublish.status === "failed" ? pythonPublish.detail
+            : "Upload stored, but no executable version was published. Configure the Python backend and complete validation.",
         source: {
           id: sourceId,
           domainId,
@@ -381,10 +479,11 @@ export async function POST(request: Request) {
           tableCount: stored.length,
           status: sourceStatus,
           contractStatus,
+          pythonPublish,
           semanticModel,
         },
       },
-      { status: 201 },
+      { status: pythonPublish.status === "published" ? 201 : 422 },
     );
   } catch (error) {
     return Response.json(

@@ -14,7 +14,7 @@ policy enforcement, bounded recovery, and production-friendly delivery interface
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-read--only-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20policy-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-270%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-691%20passing-2EA44F)
 ![Semantic contracts](https://img.shields.io/badge/semantic%20checks-82%20passing-7C3AED)
 
 </div>
@@ -429,7 +429,34 @@ python scripts/evaluate_sql.py \
   --output .queryforge/evaluations/openai.json
 ```
 
-CI runs the offline acceptance gate on Python 3.11 and 3.12.
+CI runs the offline acceptance gate (including the deterministic agent benchmark) on Python 3.11 and 3.12, plus an integration job that requires the optional transport dependencies.
+
+## What is verified (and what is not)
+
+Every claim in this section is reproducible from the repository; the linked
+acceptance record contains the gaps as well as the passes.
+
+| Capability | How you can check it | Status |
+| --- | --- | --- |
+| Full offline test suite | `make test` — **806 tests, 0 skipped** | verified |
+| Repository + integration gate | `make check` (`scripts/run_acceptance.py --full`, 13/13 checks) | verified |
+| End-to-end demos (upload → publish → query; semantic catch; multi-step analysis; transports/refusal/recovery) | `make demo` — four narrated, asserting scripts under `docs/demo/` | verified |
+| Deterministic agent benchmark (32 gold tasks, 3 independent schemas, ablation, effect gate) | `python scripts/benchmark_agent.py --tier 1 --gate` | verified (32/32) |
+| Optional-dependency integration tier | `python scripts/benchmark_agent.py --tier 2 --gate` — a missing dependency **fails** the tier | verified with `.[api,mcp]` installed |
+| Real-model NL2SQL evaluation | `python scripts/evaluate_sql.py --cases evaluation/gold/nl2sql_multidomain.jsonl --model-provider <p> --model <m>` | **not run here** — no numbers, no accuracy claim |
+
+Demo output is offline and deterministic (no model call, no network, no API key).
+The agent benchmark's tier 1 gives the SQL as a fixture, so its 32/32 measures the
+*engineering* chain (governance, execution, evidence, budget, failure
+classification) — **not model accuracy**. Real-model numbers must come from a
+tier-3 run with credentials and are reported separately
+(`.github/workflows/model-eval.yml`).
+
+Deployment level: **controlled environment, single tenant, read-only data access**.
+SQLite is the default backend; a DuckDB adapter exists behind an optional extra
+(see [Database adapters](docs/database_adapters.md)). The system is not hardened
+for arbitrary untrusted multi-tenant input, and the known gaps are listed per
+per capability in the docs listed above; the two honest blank spots are real-model evaluation (no accuracy numbers) and the PostgreSQL backend (implemented, not yet verified against a live server).
 
 ## Documentation
 

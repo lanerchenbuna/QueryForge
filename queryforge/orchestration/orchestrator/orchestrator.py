@@ -22,6 +22,11 @@ from queryforge.orchestration.gates import QualityGateEvaluator
 from queryforge.orchestration.runtime.session_store import SessionStore
 from queryforge.orchestration.runtime.state_store import AgentTeamStateStore
 from queryforge.orchestration.schemas import DeliveryReport, RoutingDecision, TaskState, utc_now
+from queryforge.orchestration.schemas.knowledge_versions import (
+    knowledge_retrieval_version_refs,
+    knowledge_version_refs,
+    merge_version_refs,
+)
 from queryforge.orchestration.schemas.session import SessionMemory, SessionTurn
 from queryforge.core.schemas.models import Context
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
@@ -120,14 +125,20 @@ class OrchestratorAgent:
         self._complete_phase(state, "routing")
         state.current_phase = "workflow"
         self.state_store.save_state(state)
+        # The workflow's ``Context`` is the only place a run records which
+        # governed definitions it loaded and which knowledge documents it put in
+        # the prompt, so the orchestrator keeps the one its hooks saw. The session
+        # turn it writes afterwards then carries the definition versions itself
+        # instead of depending on a caller to annotate them (step 17, item 八.2).
+        observed: dict[str, Context] = {}
         try:
             if direct_run is not None:
                 result = direct_run(state, self)
             else:
                 result = workflow(
-                    self._analysis_hook(state),
-                    self._candidate_hook(state),
-                    self._completion_hook(state),
+                    self._analysis_hook(state, observed),
+                    self._candidate_hook(state, observed),
+                    self._completion_hook(state, observed),
                 )
         except Exception as exc:
             context = getattr(exc, "context", None)
@@ -233,6 +244,7 @@ class OrchestratorAgent:
             session_memory,
             session_store,
             result=result,
+            context=observed.get("context"),
         )
         self.state_store.save_state(state)
 
@@ -243,8 +255,13 @@ class OrchestratorAgent:
             output["session"] = session
         return output
 
-    def _analysis_hook(self, state: TaskState) -> AnalysisHook:
+    def _analysis_hook(
+        self,
+        state: TaskState,
+        observed: dict[str, Context] | None = None,
+    ) -> AnalysisHook:
         def hook(context: Context) -> None:
+            self._remember_context(observed, context)
             state.current_phase = "analysis"
             self._start_phase(state, "analysis")
             if (
@@ -280,8 +297,13 @@ class OrchestratorAgent:
 
         return hook
 
-    def _candidate_hook(self, state: TaskState) -> CandidateHook:
+    def _candidate_hook(
+        self,
+        state: TaskState,
+        observed: dict[str, Context] | None = None,
+    ) -> CandidateHook:
         def hook(context: Context, database_tool: DatabaseTool) -> None:
+            self._remember_context(observed, context)
             if not self._phase_configured(state, "candidate"):
                 return
             self._start_phase(state, "candidate")
@@ -337,8 +359,13 @@ class OrchestratorAgent:
 
         return hook
 
-    def _completion_hook(self, state: TaskState) -> CompletionHook:
+    def _completion_hook(
+        self,
+        state: TaskState,
+        observed: dict[str, Context] | None = None,
+    ) -> CompletionHook:
         def hook(context: Context) -> None:
+            self._remember_context(observed, context)
             if self._phase_expected(state, "execution"):
                 self._start_phase(state, "execution")
             if context.execution_result is not None:
@@ -423,6 +450,21 @@ class OrchestratorAgent:
         )
         report.artifact_refs.append(reference)
 
+    @staticmethod
+    def _remember_context(
+        observed: dict[str, Context] | None, context: Context | None
+    ) -> None:
+        """Keep the newest workflow context, so the turn can be recorded from it.
+
+        ``Context`` is mutable and shared by every node, so the last hook to see it
+        holds the run's final knowledge state (retrieved documents, loaded
+        semantic model) — exactly what the session turn's version references must
+        describe. Nothing is copied: the reference is only read after the workflow
+        returned, and only for fields the workflow never rewrites afterwards.
+        """
+        if observed is not None and context is not None:
+            observed["context"] = context
+
     def _record_session_turn(
         self,
         state: TaskState,
@@ -455,17 +497,36 @@ class OrchestratorAgent:
             item if isinstance(item, dict) else {"expression": str(item)}
             for item in analysis.get("filters", [])
         ]
+        metrics = list(analysis.get("metrics") or [])
         turn = SessionTurn(
             turn_number=memory.turn_count + 1,
             question=state.original_question or str(result.get("question") or ""),
             rewritten_question=state.rewritten_question,
             sql=str(sql) if sql else None,
-            metrics=list(analysis.get("metrics") or []),
+            metrics=metrics,
             dimensions=list(analysis.get("dimensions") or []),
             filters=filters,
             time_range=analysis.get("time_range"),
             result_schema=list(result.get("columns") or []),
             status=status,
+            # The definitions and the governed knowledge this run actually used.
+            # Recorded by the writer, so a turn carries them whichever entry point
+            # persisted it, and `SessionStore.invalidate_version` always has
+            # something to match. A run that used none records none: no reference
+            # is ever invented on the turn's behalf (step 17, item 八.2).
+            knowledge_versions=merge_version_refs(
+                knowledge_version_refs(
+                    (
+                        context.semantic_model.source_path
+                        if context is not None and context.semantic_model is not None
+                        else None
+                    ),
+                    metrics,
+                ),
+                knowledge_retrieval_version_refs(
+                    None if context is None else context.vector_schema_matches
+                ),
+            ),
         )
         memory.turn_count = turn.turn_number
         memory.history.append(turn)

@@ -299,6 +299,120 @@ class EvaluateSqlTest(unittest.TestCase):
             ["policy_rejection_recall=0.0 below --min-policy-recall 1.0"],
         )
 
+    def test_duplicate_rows_are_preserved_in_semantic_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "numbers.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE numbers (value INTEGER)")
+                connection.execute("INSERT INTO numbers VALUES (1), (1)")
+            case = self._query_case(str(database))
+            case["expected_sql"] = "SELECT value FROM numbers"  # -> [[1],[1]]
+
+            class OneRowService:
+                def ask(self, question, options):
+                    return {
+                        "status": "success",
+                        "rows": [[1]],
+                        "columns": ["value"],
+                        "sql": "SELECT value FROM numbers LIMIT 1",
+                    }
+
+            report = self._run(OneRowService(), [case], database, root / "a")
+            # A single row is NOT equivalent to the duplicated expected rows.
+            self.assertEqual(report["metrics"]["semantic_correctness_rate"], 0.0)
+
+            class TwoRowService:
+                def ask(self, question, options):
+                    return {
+                        "status": "success",
+                        "rows": [[1], [1]],
+                        "columns": ["value"],
+                        "sql": "SELECT value FROM numbers",
+                    }
+
+            report = self._run(TwoRowService(), [case], database, root / "b")
+            self.assertEqual(report["metrics"]["semantic_correctness_rate"], 1.0)
+
+    def test_float_tolerance_absorbs_float_noise(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "numbers.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE numbers (value REAL)")
+            case = self._query_case(str(database))
+            case["expected_sql"] = "SELECT 0.1 + 0.2"  # 0.30000000000000004
+
+            class FloatService:
+                def ask(self, question, options):
+                    return {
+                        "status": "success",
+                        "rows": [[0.3]],
+                        "columns": ["0.1 + 0.2"],
+                        "sql": "SELECT 0.3",
+                    }
+
+            report = self._run(FloatService(), [case], database, root / "assets")
+            self.assertEqual(report["metrics"]["semantic_correctness_rate"], 1.0)
+            self.assertEqual(evaluate_sql._canonical_value(float("inf")), "Infinity")
+            self.assertEqual(evaluate_sql._canonical_value(float("nan")), "NaN")
+
+    def test_case_fingerprint_drives_unique_case_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "numbers.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE numbers (value INTEGER)")
+            duplicated = self._query_case(str(database))
+            sibling = dict(duplicated)
+            sibling["id"] = "query_2"  # same question + expected_sql, new id
+            report = self._run(
+                FakeService(), [duplicated, sibling], database, root / "assets"
+            )
+        self.assertEqual(report["case_count"], 2)
+        self.assertEqual(report["unique_case_count"], 1)
+        self.assertEqual(
+            report["results"][0]["case_fingerprint"],
+            report["results"][1]["case_fingerprint"],
+        )
+
+    def test_isolated_config_redirects_all_state_paths(self):
+        from queryforge.core.config import Config
+
+        config = Config(
+            llm_provider="openai",
+            llm_api_key=None,
+            llm_model="offline",
+            llm_base_url=None,
+            database_path="items.sqlite",
+            history_db_path=".queryforge/history.db",
+            orchestration_state_root=".queryforge/runs",
+            vector_kb_path=".queryforge/lancedb",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            isolated = evaluate_sql.isolated_config(config, directory)
+        root = Path(directory).resolve() / "isolated"
+        self.assertEqual(isolated.history_db_path, str(root / "history.db"))
+        self.assertEqual(isolated.orchestration_state_root, str(root / "runs"))
+        self.assertEqual(isolated.vector_kb_path, str(root / "lancedb"))
+        # The production config must stay untouched.
+        self.assertEqual(config.history_db_path, ".queryforge/history.db")
+
+    def test_oracle_latency_is_recorded_separately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "numbers.sqlite"
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE numbers (value INTEGER)")
+                connection.execute("INSERT INTO numbers VALUES (1)")
+            case = self._query_case(str(database))
+            report = self._run(FakeService(), [case], database, root / "assets")
+        result = report["results"][0]
+        self.assertIsNotNone(result["oracle_latency_ms"])
+        self.assertGreaterEqual(result["oracle_latency_ms"], 0)
+        self.assertIsNotNone(report["metrics"]["average_oracle_latency_ms"])
+        self.assertIsNotNone(report["metrics"]["average_service_latency_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()
