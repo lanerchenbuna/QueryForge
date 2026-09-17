@@ -7,6 +7,7 @@ stops matching reality fails this suite instead of quietly becoming a story.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -54,9 +55,17 @@ class DemoScriptsTest(unittest.TestCase):
     def test_demo_c_multi_step_analysis_with_evidence(self):
         self.assert_demo_passes("run_demo_c.py")
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("fastapi") is not None,
+        "demo D exercises the REST transport; the api extra is required",
+    )
     def test_demo_d_transports_refusals_and_recovery(self):
         self.assert_demo_passes("run_demo_d.py")
 
+    @unittest.skipUnless(
+        importlib.util.find_spec("fastapi") is not None,
+        "demo E exercises the real HTTP upload handlers; the api extra is required",
+    )
     def test_demo_e_api_upload_repair_and_attribution(self):
         """Absorbed the earlier `scripts/demo_data_agent.py` scenarios (step 17)."""
         self.assert_demo_passes("run_demo_e.py")
