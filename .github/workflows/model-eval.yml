@@ -6,13 +6,11 @@ name: model-evaluation
 #   * the numbers are not comparable with the deterministic tier-1/2 gates, and
 #     mixing them would let a model flake look like a product regression;
 #   * it needs provider credentials and costs money per run.
-# Scheduled and manual only, and it refuses to run without credentials so a
-# missing secret is an explicit failure instead of a silent pass.
+# Run manually for release checks or substantial model/prompt changes. It refuses
+# to run without credentials so a missing secret is an explicit failure instead
+# of a silent pass.
 
 "on":
-  schedule:
-    # Sunday 10:00 Asia/Shanghai (02:00 UTC).
-    - cron: "0 2 * * 0"
   workflow_dispatch:
     inputs:
       limit:
