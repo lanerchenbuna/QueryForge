@@ -819,12 +819,30 @@ class DatabaseAdapter(ABC):
     def _enforce_row_bound(
         result: ExecutionResult, limit: int | None
     ) -> ExecutionResult:
-        """Re-apply the bound after fetch: the engine bound is not the contract."""
-        if limit is None or len(result.rows) <= limit:
-            return result
+        """Re-apply the bound after fetch: the engine bound is not the contract.
+
+        The result keeps both numbers: ``fetched_row_count`` is what the engine
+        produced and ``row_count`` is what the caller receives, with ``truncated``
+        saying they differ. Overwriting ``row_count`` alone made a capped result
+        indistinguishable from a complete one.
+        """
+
+        fetched = len(result.rows)
+        if limit is None or fetched <= limit:
+            return ExecutionResult(
+                columns=list(result.columns),
+                rows=result.rows,
+                row_count=result.row_count,
+                truncated=False,
+                fetched_row_count=max(fetched, result.row_count),
+            )
         rows = result.rows[:limit]
         return ExecutionResult(
-            columns=list(result.columns), rows=rows, row_count=len(rows)
+            columns=list(result.columns),
+            rows=rows,
+            row_count=len(rows),
+            truncated=True,
+            fetched_row_count=max(fetched, result.row_count),
         )
 
 

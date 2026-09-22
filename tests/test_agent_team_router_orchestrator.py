@@ -14,8 +14,16 @@ from queryforge.orchestration.orchestrator.pipeline_registry import (
     register_pipeline,
 )
 from queryforge.orchestration.runtime.state_store import AgentTeamStateStore
+from queryforge.orchestration.orchestrator.orchestrator import OrchestratorAgent
 from queryforge.orchestration.schemas import RoutingDecision, TaskState, TaskStatus
 from queryforge.core.config import Config
+from queryforge.core.schemas.models import (
+    Context,
+    ExecutionResult,
+    ReflectionResult,
+    SQLContext,
+    SqlTask,
+)
 from queryforge.domain.semantic import (
     SemanticEntity,
     SemanticMetric,
@@ -128,6 +136,86 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
                 self.assertEqual(decision.task_type, expected)
                 self.assertEqual(decision.entrypoint, "cli")
 
+    def test_router_cjk_markers_are_whitespace_insensitive(self):
+        """D-3: the Chinese marker tables were internally inconsistent.
+
+        ``route`` normalises whitespace with ``" ".join(text.split())``, which
+        collapses runs but cannot remove a single space inside a Chinese phrase.
+        ``_SQL_REVIEW_MARKERS`` / ``_TROUBLESHOOT_MARKERS`` therefore spelled each
+        Chinese marker twice ("审核sql" and "审核 sql") while ``_REPORT_MARKERS``,
+        ``_METADATA_MARKERS`` and ``_EXPLAIN_MARKERS`` listed only the unspaced
+        form — so "生成 报告" fell through to the default ``ask_sql`` while
+        "审核 sql" worked. Marker matching is now whitespace-tolerant for every
+        marker, so no table can drift again.
+        """
+        router = EntryRouterAgent()
+        cases = {
+            "生成报告": "build_report",
+            "生成 报告": "build_report",
+            "生成  报告": "build_report",
+            "制作 报告": "build_report",
+            "生成 看板": "build_report",
+            "表结构": "metadata_query",
+            "表 结构": "metadata_query",
+            "指标 列表": "metadata_query",
+            "有哪些表": "metadata_query",
+            "为什么": "explain_result",
+            "为 什么": "explain_result",
+            "解释 结果": "explain_result",
+            "审核sql": "sql_review",
+            "审核 sql": "sql_review",
+            "审 核 sql": "sql_review",
+            "修复 sql": "troubleshoot_sql",
+            "sql 报错": "troubleshoot_sql",
+        }
+        for question, expected in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(router.route(question).task_type, expected)
+
+    def test_router_latin_markers_still_classify_as_before(self):
+        """The whitespace-tolerant matcher must not disturb Latin behaviour."""
+        router = EntryRouterAgent()
+        cases = {
+            "generate report": "build_report",
+            "create report": "build_report",
+            "dashboard": "build_report",
+            "show tables": "metadata_query",
+            "database schema": "metadata_query",
+            "explain the output": "explain_result",
+            "review sql": "sql_review",
+            "fix this sql": "troubleshoot_sql",
+            "how many orders were placed": "ask_sql",
+        }
+        for question, expected in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(router.route(question).task_type, expected)
+
+    def test_a_keyword_inside_an_identifier_does_not_route_the_request(self):
+        """E-08: "report" matched "sales_report" and hijacked the whole request.
+
+        Marker matching is substring-based, so a bare keyword appearing inside a
+        table or column name was enough to classify the request: "Show the first 10
+        rows of sales_report" became a report-building task, and the run skipped
+        straight to report generation instead of answering the question. ASCII
+        markers now match on a word boundary; CJK is unaffected because it has no
+        such boundary.
+        """
+        router = EntryRouterAgent()
+        cases = {
+            "Show the first 10 rows of sales_report": "ask_sql",
+            "显示 sales_report 的前 10 行": "ask_sql",
+            "List rows from a metadata_table": "ask_sql",
+            "How many rows are in the explain_log": "ask_sql",
+            # Genuine report requests must still route as before.
+            "build report for monthly sales": "build_report",
+            "generate report": "build_report",
+            "dashboard": "build_report",
+            "生成报告": "build_report",
+        }
+        for question, expected in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(router.route(question).task_type, expected)
+
     def test_router_assigns_simple_and_complex_execution_profiles(self):
         router = EntryRouterAgent()
         simple = router.route("List item names")
@@ -189,7 +277,15 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
             ("product_analyst", "schema_architect", "delivery"),
         )
 
-    def test_auto_complex_profile_enables_expensive_stages_only_for_complex_requests(self):
+    def test_auto_complex_profile_enables_the_tool_loop_but_not_extra_candidates(self):
+        """Complexity routing boosts the tool loop only.
+
+        It used to also raise parallel_candidates to 2. A controlled ablation over
+        identical inputs found zero accuracy benefit for the second candidate with
+        ~20% higher p50 latency (docs/evaluation_baselines.md), and the boost was
+        often wasted anyway because the tool loop short-circuits the candidate
+        node. Candidates are now opt-in via the caller.
+        """
         service = self.service()
         service.ask("List item names", self.options(run_id="simple_profile"))
         self.assertFalse(self.runners[-1].kwargs["tool_loop_enabled"])
@@ -200,7 +296,8 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
             self.options(run_id="complex_profile"),
         )
         self.assertTrue(self.runners[-1].kwargs["tool_loop_enabled"])
-        self.assertEqual(self.runners[-1].kwargs["parallel_candidates"], 2)
+        # Not raised implicitly — see the docstring.
+        self.assertEqual(self.runners[-1].kwargs["parallel_candidates"], 1)
 
         service.ask(
             "List item names",
@@ -214,7 +311,17 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
             self.options(run_id="forced_complex", complexity_mode="complex"),
         )
         self.assertTrue(self.runners[-1].kwargs["tool_loop_enabled"])
+        self.assertEqual(self.runners[-1].kwargs["parallel_candidates"], 1)
+
+    def test_an_explicit_candidate_count_is_still_honoured(self):
+        """The opt-in path must survive: a caller that wants candidates gets them."""
+        service = self.service()
+        service.ask(
+            "Compare monthly revenue by region and product category with top ranking",
+            self.options(run_id="explicit_candidates", parallel_candidates=2),
+        )
         self.assertEqual(self.runners[-1].kwargs["parallel_candidates"], 2)
+        self.assertTrue(self.runners[-1].kwargs["tool_loop_enabled"])
 
     def test_pipeline_is_declarative_and_contains_expected_ask_sql_roles(self):
         self.assertEqual(
@@ -538,7 +645,7 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
 
         # The same first-writer-wins rule covers every terminal status; a run that
         # is still running is the only one a cancellation may claim.
-        for status in ("completed", "failed", "cancelled"):
+        for status in ("completed", "failed", "cancelled", "needs_clarification"):
             with self.subTest(status=status):
                 terminal = blocked_state(f"terminal_{status}")
                 terminal.status = status
@@ -563,6 +670,163 @@ class AgentTeamRouterOrchestratorTest(unittest.TestCase):
         )
         self.assertIsNotNone(persisted)
         self.assertEqual(store.load_state(running.run_id).status, "cancelled")
+
+    def test_a_recorded_gate_block_is_not_overwritten_by_a_stale_result_status(self):
+        """E-02 regression: the QA gate's block must survive the delivery path.
+
+        The completion hook runs *after* ``ReflectiveWorkflow.run()`` has already
+        returned its output, so the workflow's result dict can still say "success"
+        while a gate has blocked the run. The orchestrator used to re-derive the
+        status from that stale dict and write ``completed``, leaving ``state.json``
+        saying ``blocked`` (with a recorded reason) and the caller being told the
+        run succeeded.
+
+        This test drives the real gate and the real derivation rather than
+        asserting the mapping in isolation.
+        """
+        from queryforge.core.outcomes import derive_outcome
+        from queryforge.orchestration.agents.data_qa import DataQAAgent
+        from queryforge.orchestration.orchestrator.orchestrator import (
+            _DELIVERY_STATUS_FOR_OUTCOME,
+            _TASK_STATUS_FOR_OUTCOME,
+        )
+
+        root = self.root / ".queryforge" / "runs"
+        store = AgentTeamStateStore(root)
+        state = TaskState(
+            run_id="gate_block_survives_delivery",
+            entrypoint="test",
+            classification=RoutingDecision(
+                task_type="ask_sql",
+                entrypoint="test",
+                confidence=1,
+                reason="test",
+                pipeline="ask_sql",
+            ),
+            status="running",
+        )
+        store.initialize(state)
+
+        # A QA report the deterministic gate must treat as blocking.
+        DataQAAgent(store).emit(
+            state,
+            {
+                "passed": False,
+                "row_count": 3,
+                "columns": ["a"],
+                "row_count_consistent": False,
+                "answers_question": False,
+                "empty_result": False,
+                "issues": [
+                    {
+                        "rule": "row_count_mismatch",
+                        "severity": "error",
+                        "reason": "row_count does not match the returned rows",
+                    }
+                ],
+                "quality_checks": [],
+                "quality_status": "skipped",
+                "reflection": None,
+                "retry_recommendation": "REGENERATE",
+                "sql_attempts": [],
+            },
+        )
+
+        orchestrator = OrchestratorAgent(store)
+        context = Context(
+            task=SqlTask(question="q", database_path="/tmp/x.sqlite"),
+            run_id=state.run_id,
+            sql_context=SQLContext(sql="SELECT 1", explanation="e", tables_used=[]),
+            execution_result=ExecutionResult(
+                columns=["a"], rows=[[1], [2]], row_count=3
+            ),
+            reflection_result=ReflectionResult(
+                success=True, strategy="SUCCESS", reason="ok"
+            ),
+        )
+        context.final_output = {"status": "success", "run_id": state.run_id}
+        state.pending_phases = ["completion"]
+        orchestrator._completion_hook(state)(context)
+
+        self.assertEqual(state.blocked_reason, "qa_report found severe data quality issue")
+        self.assertEqual(state.status, "blocked")
+
+        # The workflow still reports its earlier, pre-hook status.
+        stale_result = {"status": "success", "run_id": state.run_id}
+        outcome = derive_outcome(
+            result_status=stale_result.get("status"),
+            blocked_reason=state.blocked_reason,
+        )
+        self.assertEqual(outcome, "blocked")
+        self.assertEqual(_TASK_STATUS_FOR_OUTCOME[outcome], "blocked")
+        # A block is reported as degraded delivery, never as success.
+        self.assertEqual(_DELIVERY_STATUS_FOR_OUTCOME[outcome], "degraded")
+
+    def test_run_context_carries_identity_and_versions(self):
+        """feat-008: one object holds run identity and the versions it depends on."""
+        from queryforge.core.schemas.models import RunContext
+
+        context = Context(
+            task=SqlTask(question="q", database_path="/tmp/x.sqlite"),
+            run_id="qf_identity",
+        )
+        context.task_context["retrieval_scope"] = {
+            "domain_id": "retail",
+            "data_version": "2024-01",
+        }
+        run_context = RunContext.from_context(
+            context, semantic_version="7", entrypoint="api"
+        )
+        self.assertEqual(run_context.run_id, "qf_identity")
+        self.assertEqual(run_context.domain_id, "retail")
+        self.assertEqual(run_context.data_version, "2024-01")
+        self.assertEqual(run_context.semantic_version, "7")
+        self.assertEqual(run_context.entrypoint, "api")
+        # An undeclared version stays None: "not declared" is not "unchanged".
+        self.assertIsNone(run_context.policy_version)
+
+    def test_needs_clarification_is_a_terminal_status_that_round_trips(self):
+        """D-2: a clarification stop must be persistable and not overwritten.
+
+        Before this, a NEED_USER_REVIEW verdict raised and produced no payload;
+        ``needs_clarification`` was also absent from ``TaskStatus``, so persisting
+        it would have failed validation on the next read.
+        """
+        from queryforge.application.agent_service import persist_cancelled_outcome
+
+        root = self.root / ".queryforge" / "runs"
+        store = AgentTeamStateStore(root)
+        state = TaskState(
+            run_id="clarify_round_trip",
+            entrypoint="test",
+            classification=RoutingDecision(
+                task_type="ask_sql",
+                entrypoint="test",
+                confidence=1,
+                reason="test",
+                pipeline="ask_sql",
+            ),
+            status="needs_clarification",
+            current_phase="clarification",
+        )
+        store.initialize(state)
+        self.assertIn("needs_clarification", TaskStatus.__args__)
+
+        loaded = store.load_state("clarify_round_trip")
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.status, "needs_clarification")
+        self.assertEqual(loaded.current_phase, "clarification")
+
+        # A late disconnect must not relabel a question as a cancellation.
+        self.assertIsNone(
+            persist_cancelled_outcome(
+                state_root=root,
+                run_id="clarify_round_trip",
+                reason="client disconnected",
+            )
+        )
+        still = store.load_state("clarify_round_trip")
+        self.assertEqual(still.status, "needs_clarification")
 
     def test_plan_uses_integrated_analysis_candidate_governance_and_ops(self):
         output = self.real_service().plan(

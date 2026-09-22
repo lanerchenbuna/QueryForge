@@ -24,6 +24,18 @@ class ModelResponseError(ModelError):
         self.raw_output = raw_output
 
 
+def _timeout_kwarg(timeout: float | None) -> dict[str, float]:
+    """``{"timeout": ...}`` only when a deadline was actually declared.
+
+    Subclasses and test doubles commonly override ``generate_with_messages`` with
+    the historical two-argument signature. Passing ``timeout=None``
+    unconditionally would break every one of them, so the keyword is added only
+    when there is a real deadline to communicate.
+    """
+
+    return {} if timeout is None else {"timeout": float(timeout)}
+
+
 class BaseModelProvider(ABC):
     """Small interface shared by every QueryForge provider adapter."""
 
@@ -47,15 +59,20 @@ class BaseModelProvider(ABC):
         self.last_usage = usage
         return usage
 
-    def generate_text(self, prompt: str) -> str:
+    def generate_text(
+        self, prompt: str, timeout: float | None = None
+    ) -> str:
         return self.generate_with_messages(
             [
                 {"role": "system", "content": "You are a careful assistant."},
                 {"role": "user", "content": prompt},
-            ]
+            ],
+            **_timeout_kwarg(timeout),
         )
 
-    def generate_json(self, prompt: str) -> dict[str, Any]:
+    def generate_json(
+        self, prompt: str, timeout: float | None = None
+    ) -> dict[str, Any]:
         raw_output = self.generate_with_messages(
             [
                 {
@@ -65,6 +82,7 @@ class BaseModelProvider(ABC):
                 {"role": "user", "content": prompt},
             ],
             json_mode=True,
+            **_timeout_kwarg(timeout),
         )
         candidate = self._extract_json_object(raw_output)
         try:
@@ -84,9 +102,19 @@ class BaseModelProvider(ABC):
 
     @abstractmethod
     def generate_with_messages(
-        self, messages: list[Message], json_mode: bool = False
+        self,
+        messages: list[Message],
+        json_mode: bool = False,
+        timeout: float | None = None,
     ) -> str:
-        """Generate text from normalized role/content messages."""
+        """Generate text from normalized role/content messages.
+
+        ``timeout`` is the remaining wall-clock budget for this call in seconds, or
+        ``None`` when the run declared no deadline. Adapters that can bound a
+        request should honour it; the parameter exists so the run's remaining
+        deadline can actually reach the client instead of being recorded and then
+        ignored (``BudgetLimits.model_deadline_ms`` used to have no consumer).
+        """
 
     @staticmethod
     def _extract_json_object(raw_output: str) -> str:

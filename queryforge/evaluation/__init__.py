@@ -5,7 +5,7 @@ into a recomputable report.  It is deliberately isolated from the pipeline it
 grades: it imports nothing but the standard library and pydantic, never
 ``queryforge.workflow``/``application``/``orchestration``/``interfaces``, so a
 bug in the runtime cannot make the benchmark lenient (see
-``tests/test_evaluation_isolation.py``).
+``tests/test_agent_task_gold.py::test_evaluator_does_not_import_runtime_being_graded``).
 
 Typical use::
 

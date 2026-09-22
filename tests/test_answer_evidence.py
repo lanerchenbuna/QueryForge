@@ -652,3 +652,87 @@ class CompletenessHelperTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SemanticValidationPropagationTest(unittest.TestCase):
+    """E-11: a semantic verdict must travel with the answer.
+
+    ``SemanticSQLValidator`` reports three states, and only one of them means the
+    SQL was *proved* to answer the question. ``unsupported`` (an unlisted SQL
+    shape, an unparsable statement) used to reach a log line and nothing else, so a
+    run whose business semantics were never checked was delivered exactly like one
+    that passed every check.
+    """
+
+    def _output(self, task_context):
+        from queryforge.core.schemas.models import (
+            Context,
+            ExecutionResult,
+            ReflectionResult,
+            SQLContext,
+            SqlTask,
+        )
+        from queryforge.workflow.node.output_node import OutputNode
+
+        context = Context(
+            task=SqlTask(question="q", database_path="/tmp/x.sqlite")
+        )
+        context.task_context.update(task_context)
+        context.sql_context = SQLContext(
+            sql="SELECT 1", explanation="e", tables_used=[]
+        )
+        context.execution_result = ExecutionResult(
+            columns=["a"], rows=[[1]], row_count=1
+        )
+        context.reflection_result = ReflectionResult(
+            success=True, strategy="SUCCESS", reason="ok"
+        )
+        OutputNode().execute(context)
+        return context.final_output
+
+    def test_a_passed_verdict_is_reported_as_verified(self):
+        output = self._output(
+            {"semantic_validation": {"status": "passed", "rule_names": []}}
+        )
+        summary = output["semantic_validation"]
+        self.assertEqual(summary["status"], "passed")
+        self.assertTrue(summary["verified"])
+        # Nothing to warn about, so no completeness note is added.
+        notes = output["completeness"].get("notes") or []
+        self.assertFalse(any("Business semantics" in str(n) for n in notes))
+
+    def test_unsupported_is_not_verified_and_is_stated_in_the_answer(self):
+        output = self._output(
+            {
+                "semantic_validation": {
+                    "status": "unsupported",
+                    "unsupported_reason": "SQLite SQL could not be parsed",
+                    "rule_names": [],
+                }
+            }
+        )
+        summary = output["semantic_validation"]
+        self.assertEqual(summary["status"], "unsupported")
+        self.assertFalse(summary["verified"])
+        self.assertIn("could not be parsed", summary["reason"])
+        notes = output["completeness"].get("notes") or []
+        self.assertTrue(
+            any("Business semantics" in str(n) for n in notes),
+            "an unproved verdict must be visible in the completeness record too",
+        )
+
+    def test_a_violation_is_not_verified(self):
+        output = self._output(
+            {"semantic_validation": {"status": "violation", "rule_names": ["fanout"]}}
+        )
+        summary = output["semantic_validation"]
+        self.assertFalse(summary["verified"])
+        self.assertEqual(summary["rules"], ["fanout"])
+
+    def test_a_run_with_no_verdict_says_so_rather_than_looking_verified(self):
+        """The common case: a follow-up that matched no governed metric."""
+        output = self._output({})
+        summary = output["semantic_validation"]
+        self.assertEqual(summary["status"], "not_run")
+        self.assertFalse(summary["verified"])
+        self.assertIn("no governed metric", summary["reason"])

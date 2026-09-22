@@ -1267,7 +1267,17 @@ class AnalysisPlannerServiceTest(unittest.TestCase):
             ["check_data_quality", "compose_answer", "query_metric", "resolve_metric"],
         )
         self.assertEqual(resumed["recomputed_steps"], [])
-        self.assertEqual(resumed["budgets"]["usage"]["max_tool_calls"], 0)
+        # E-04: budget usage is cumulative across attempts of one run, so the
+        # inherited amount is reported separately from what this attempt spent.
+        # This assertion previously read ``usage == 0``, which encoded the defect:
+        # the budget reset on every resume, so a crashed-and-restarted run could
+        # spend its whole allowance again. Here every step was reused, so this
+        # attempt spent nothing and the whole figure is inheritance.
+        self.assertGreater(resumed["inherited_usage"]["max_tool_calls"], 0)
+        self.assertEqual(
+            resumed["budgets"]["usage"]["max_tool_calls"],
+            resumed["inherited_usage"]["max_tool_calls"],
+        )
         self.assertEqual(resumed["answer"]["value"], len(ITEMS))
 
 

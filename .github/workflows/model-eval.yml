@@ -38,10 +38,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      # ``load_config`` only reads the *provider-specific* variables declared in
+      # ``models.yml`` (openai -> OPENAI_API_KEY / OPENAI_MODEL /
+      # OPENAI_BASE_URL, and so on). A generic ``LLM_API_KEY`` is never consulted
+      # by the loader, so subscribing only that name let the credential gate below
+      # pass while every real model call failed with "No API key is configured
+      # for provider 'openai'". Every provider therefore maps its own secret here.
+      #
+      # All of them are populated from the same optional secret so a single
+      # repository secret can drive whichever provider is dispatched; a provider
+      # whose variable stays empty simply fails at the gate below.
+      #
+      # Only the api-key variables are fanned out. The model/base-url variables
+      # are deliberately NOT set here: ``--model-provider``/``--model`` are passed
+      # explicitly to both evaluation steps, so a fanned-out ``*_MODEL`` would be
+      # a second, contradicting source of truth.
       LLM_PROVIDER: ${{ github.event.inputs.provider || 'openai' }}
       LLM_MODEL: ${{ github.event.inputs.model || 'gpt-4o-mini' }}
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.LLM_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.LLM_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.LLM_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.LLM_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.LLM_API_KEY }}
+      GLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.LLM_BASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,16 +77,36 @@ jobs:
       - run: python sample/generate_aux_datasets.py
       - name: Require provider credentials
         run: |
-          if [ -z "${LLM_API_KEY}" ]; then
-            echo "LLM_API_KEY is not configured; tier 3 cannot run." >&2
-            echo "Add the repository secret or dispatch this workflow manually with credentials." >&2
+          # Check the variable ``load_config`` actually reads for the dispatched
+          # provider — not the generic LLM_API_KEY, which the loader ignores.
+          case "${LLM_PROVIDER}" in
+            openai)   key="${OPENAI_API_KEY}" ;;
+            claude)   key="${ANTHROPIC_API_KEY}" ;;
+            gemini)   key="${GEMINI_API_KEY}" ;;
+            deepseek) key="${DEEPSEEK_API_KEY}" ;;
+            qwen)     key="${QWEN_API_KEY:-${DASHSCOPE_API_KEY}}" ;;
+            glm)      key="${GLM_API_KEY:-${ZAI_API_KEY}}" ;;
+            *)
+              echo "Unsupported provider '${LLM_PROVIDER}' for this workflow." >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "${key}" ]; then
+            echo "No API key is configured for provider '${LLM_PROVIDER}'; tier 3 cannot run." >&2
+            echo "Add the repository secret LLM_API_KEY (mapped to the provider-specific variable)" >&2
+            echo "or dispatch this workflow manually with credentials." >&2
             exit 1
           fi
       - name: Evaluate the NL2SQL gold set with a real model
         run: |
+          # ``--model-provider`` / ``--model`` are passed explicitly: without them
+          # this step silently ignored the dispatched ``model`` input and used the
+          # provider default from models.yml instead.
           python scripts/evaluate_sql.py \
             --cases evaluation/gold/nl2sql_multidomain.jsonl \
             --limit "${{ github.event.inputs.limit || 40 }}" \
+            --model-provider "${LLM_PROVIDER}" \
+            --model "${LLM_MODEL}" \
             --output evaluation/reports/nl2sql_model_eval.json
       - name: Tier-3 agent task report (recorded, not gating)
         run: |

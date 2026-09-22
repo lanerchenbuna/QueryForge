@@ -48,20 +48,35 @@ class ProductAnalystAgent(RoleAgent):
         r"\b(?:growth|increase|decrease|compare|comparison|versus|vs|yoy|mom)\b|增长|下降|对比|比较|同比|环比",
         re.IGNORECASE,
     )
+    # Older revisions of these patterns required whitespace after the marker,
+    # which works for Latin input ("by region") but silently failed for the most
+    # natural Chinese phrasing: "按地区" is one unspaced run, so it never matched
+    # while "按 地区" did. The same file already used the space-optional form in
+    # _TIME_FOLLOWUP / _TOP_FOLLOWUP, so the two conventions were inconsistent
+    # and the follow-up was lost entirely — the router then treated a bare
+    # follow-up as a fresh question and the model invented its own metrics.
+    #
+    # A single optional-whitespace separator now covers both scripts, and every
+    # pattern captures its payload in the named group "rest" so an unmatched
+    # alternative can never raise on a missing group.
     _BREAKDOWN_FOLLOWUP = re.compile(
-        r"^(?:by|per|break(?:\s+it)?\s+down\s+by|按|按照)\s+(.+?)(?:\s*(?:again|再|一下|呢))?$",
+        r"^(?:by|per|break(?:\s+it)?\s+down\s+by|按|按照)\s*"
+        r"(?P<rest>.+?)(?:\s*(?:again|再|一下|呢))?$",
         re.IGNORECASE,
     )
     _FILTER_FOLLOWUP = re.compile(
-        r"^(?:only(?:\s+(?:show|include|look at))?|filter(?:\s+to)?|只看|仅看|只保留)\s+(.+)$",
+        r"^(?:only(?:\s+(?:show|include|look\s+at))?|filter(?:\s+to)?|只看|仅看|只保留)\s*"
+        r"(?P<rest>.+?)(?:\s*(?:again|再|一下|呢))?$",
         re.IGNORECASE,
     )
     _ADD_FOLLOWUP = re.compile(
-        r"^(?:also\s+(?:include|add)|add|再加上|加上)\s+(.+)$",
+        r"^(?:also\s+(?:include|add)|add|再加上|加上)\s*"
+        r"(?P<rest>.+?)(?:\s*(?:again|再|一下|呢))?$",
         re.IGNORECASE,
     )
     _REMOVE_FOLLOWUP = re.compile(
-        r"^(?:remove|drop|去掉|移除)\s+(.+)$",
+        r"^(?:remove|drop|去掉|移除|删除)\s*"
+        r"(?P<rest>.+?)(?:\s*(?:again|再|一下|呢))?$",
         re.IGNORECASE,
     )
     _TOP_FOLLOWUP = re.compile(
@@ -73,7 +88,37 @@ class ProductAnalystAgent(RoleAgent):
         re.IGNORECASE,
     )
     _REFERENCE_FOLLOWUP = re.compile(
-        r"\b(?:that result|previous result|same result|刚才那个|那个结果|上一个结果)\b",
+        # \b cannot anchor CJK: 汉 characters are word characters in Python's
+        # Unicode re, so "\b刚才那个\b" only matched when the phrase happened to
+        # sit between non-word characters. That made "那个结果再按地区" (where the
+        # phrase is followed by another Han character) fail while "刚才那个"
+        # alone succeeded. Split the alternatives so Latin keeps \b and CJK uses
+        # no boundary assertion at all.
+        r"\b(?:that result|previous result|same result)\b"
+        r"|(?:刚才那个|那个结果|上一个结果|上一条结果)",
+        re.IGNORECASE,
+    )
+    #: A bare request to repeat the previous query, with no new content. This is
+    #: the shape the benchmark's only multi-turn case uses ("再查一次"), and it
+    #: used to fall through to the router as a brand-new question.
+    _REPEAT_FOLLOWUP = re.compile(
+        r"^(?:再|重新|重|又)?\s*(?:查|查询|跑|执行|算|来|看)\s*(?:一遍|一次|一下|一回|下)?$"
+        r"|^(?:再来|重来)$",
+        re.IGNORECASE,
+    )
+    #: Verbs that make the captured payload a complete instruction rather than a
+    #: fragment to attach to the previous request. Dropping the required space
+    #: after the CJK markers must not turn "按门店统计订单数" (a full question)
+    #: into a follow-up.
+    #:
+    #: Only words that are rare as *metric or dimension names* belong here. A
+    #: first attempt also listed count/total/average/sum/query/list, which broke a
+    #: legitimate follow-up ("also include order count") because "count" is a
+    #: perfectly ordinary metric name — the guard must not be more eager than the
+    #: pattern it guards.
+    _PAYLOAD_ACTION = re.compile(
+        r"统计|查询|计算|分析|汇总|列出|找出|求和|排名|排序|占比"
+        r"|\b(?:compute|calculate|compare)\b",
         re.IGNORECASE,
     )
 
@@ -101,35 +146,35 @@ class ProductAnalystAgent(RoleAgent):
                 "add_time_dimension",
             )
         breakdown = cls._BREAKDOWN_FOLLOWUP.match(original)
-        if breakdown:
+        if breakdown and not cls._payload_is_an_instruction(breakdown):
             return cls._rewrite(
                 original,
                 previous,
-                f"Break down the result by {breakdown.group(1).strip()}.",
+                f"Break down the result by {breakdown.group('rest').strip()}.",
                 "add_dimension",
             )
         filtered = cls._FILTER_FOLLOWUP.match(original)
-        if filtered:
+        if filtered and not cls._payload_is_an_instruction(filtered):
             return cls._rewrite(
                 original,
                 previous,
-                f"Only include {filtered.group(1).strip()}.",
+                f"Only include {filtered.group('rest').strip()}.",
                 "add_filter",
             )
         added = cls._ADD_FOLLOWUP.match(original)
-        if added:
+        if added and not cls._payload_is_an_instruction(added):
             return cls._rewrite(
                 original,
                 previous,
-                f"Also include {added.group(1).strip()} as an additional metric or field.",
+                f"Also include {added.group('rest').strip()} as an additional metric or field.",
                 "add_metric",
             )
         removed = cls._REMOVE_FOLLOWUP.match(original)
-        if removed:
+        if removed and not cls._payload_is_an_instruction(removed):
             return cls._rewrite(
                 original,
                 previous,
-                f"Remove {removed.group(1).strip()} from the grouping or requested metrics.",
+                f"Remove {removed.group('rest').strip()} from the grouping or requested metrics.",
                 "remove_dimension_or_metric",
             )
         top = cls._TOP_FOLLOWUP.match(original)
@@ -148,11 +193,36 @@ class ProductAnalystAgent(RoleAgent):
                 original,
                 "resolve_reference",
             )
+        if cls._REPEAT_FOLLOWUP.match(original):
+            # "再查一次" carries no new content: unlike the other branches there
+            # is nothing to add, so the previous request is re-issued verbatim
+            # instead of being passed through as a fresh question.
+            return cls._rewrite(
+                original,
+                previous,
+                "Repeat the previous request exactly.",
+                "repeat_previous_request",
+            )
         return {
             "question": original,
             "is_followup": False,
             "reason": None,
         }
+
+    @classmethod
+    def _payload_is_an_instruction(cls, match: "re.Match[str]") -> bool:
+        """Whether a marker's captured payload is itself a complete instruction.
+
+        The CJK markers now accept an optional space, so "按门店统计订单数" matches
+        the breakdown pattern. Its payload carries its own verb, which means the
+        text is a standalone question rather than a fragment to attach to the
+        previous request — treating it as a follow-up would silently discard the
+        user's new instruction. Returns True when the payload must NOT be treated
+        as a follow-up.
+        """
+
+        payload = (match.group("rest") or "").strip()
+        return bool(payload) and bool(cls._PAYLOAD_ACTION.search(payload))
 
     @staticmethod
     def _rewrite(

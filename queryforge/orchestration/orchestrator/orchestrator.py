@@ -19,6 +19,7 @@ from queryforge.orchestration.agents.sql_developer import SQLDeveloperAgent
 from queryforge.orchestration.agents.visualization import VisualizationAgent
 from queryforge.orchestration.quality import append_warning
 from queryforge.orchestration.gates import QualityGateEvaluator
+from queryforge.core.outcomes import TerminalOutcome, derive_outcome
 from queryforge.orchestration.runtime.session_store import SessionStore
 from queryforge.orchestration.runtime.state_store import AgentTeamStateStore
 from queryforge.orchestration.schemas import DeliveryReport, RoutingDecision, TaskState, utc_now
@@ -37,6 +38,66 @@ CandidateHook = Callable[[Context, DatabaseTool], None]
 CompletionHook = Callable[[Context], None]
 WorkflowRun = Callable[[AnalysisHook, CandidateHook, CompletionHook], dict[str, Any]]
 DirectRun = Callable[[TaskState, "OrchestratorAgent"], dict[str, Any]]
+
+
+#: Canonical terminal outcome -> the value persisted in ``TaskState.status``.
+#: ``succeeded`` is spelled ``completed`` in the persisted vocabulary for backward
+#: compatibility with existing ``state.json`` files and readers.
+_TASK_STATUS_FOR_OUTCOME: dict[TerminalOutcome, str] = {
+    "succeeded": "completed",
+    "needs_clarification": "needs_clarification",
+    "blocked": "blocked",
+    "partial": "blocked",
+    "failed": "failed",
+    "cancelled": "cancelled",
+}
+
+
+def _phase_for(
+    outcome: TerminalOutcome, state: Any, blocked_phase: str | None
+) -> str:
+    if outcome == "needs_clarification":
+        return "clarification"
+    if outcome in {"blocked", "partial"}:
+        return blocked_phase or "blocked"
+    if outcome == "cancelled":
+        return "cancelled"
+    if outcome == "failed":
+        return "failed"
+    return "delivery"
+
+
+_PHASE_FOR_OUTCOME = {
+    outcome: (lambda state, blocked_phase, _o=outcome: _phase_for(_o, state, blocked_phase))
+    for outcome in (
+        "succeeded",
+        "needs_clarification",
+        "blocked",
+        "partial",
+        "failed",
+        "cancelled",
+    )
+}
+
+#: Delivery report status. A clarification and a block are both "degraded" rather
+#: than "success", because neither delivered an answer.
+_DELIVERY_STATUS_FOR_OUTCOME: dict[TerminalOutcome, str] = {
+    "succeeded": "success",
+    "needs_clarification": "degraded",
+    "blocked": "degraded",
+    "partial": "degraded",
+    "failed": "failed",
+    "cancelled": "failed",
+}
+
+_SUMMARY_FOR_OUTCOME: dict[TerminalOutcome, str] = {
+    "succeeded": "The request completed through the integrated Agent Team workflow.",
+    "needs_clarification": "The request stopped for user clarification.",
+    "blocked": "The request was blocked by a quality gate.",
+    "partial": "The request completed partially; see the artifacts for what is missing.",
+    "failed": "The integrated Agent Team workflow failed.",
+    "cancelled": "The run was cancelled before it finished.",
+}
 
 
 class OrchestratorAgent:
@@ -210,13 +271,23 @@ class OrchestratorAgent:
                 self.state_store.save_state(state)
                 raise
 
-        result_status = str(result.get("status") or "success")
-        if result_status == "blocked":
-            state.status = "blocked"
-            state.current_phase = state.blocked_phase or "blocked"
-        else:
-            state.status = "completed"
-            state.current_phase = "delivery"
+        # One derivation, one vocabulary (queryforge.core.outcomes).
+        #
+        # This block previously re-derived the status from the workflow's result
+        # dict and ignored a block the completion hook had already recorded, which
+        # is how defect E-02 happened: the QA gate set state.status = "blocked" and
+        # this code then overwrote it to "completed", so state.json and the caller
+        # disagreed. A recorded block now wins over the result status, and the
+        # persisted status is mapped onto the canonical vocabulary.
+        outcome = derive_outcome(
+            result_status=result.get("status"),
+            blocked_reason=state.blocked_reason,
+            cancelled=state.status == "cancelled",
+        )
+        state.status = _TASK_STATUS_FOR_OUTCOME[outcome]
+        state.current_phase = _PHASE_FOR_OUTCOME[outcome](
+            state, state.blocked_phase
+        )
         self._start_phase(state, "delivery")
         self._complete_phase(state, "delivery")
         state.pending_phases = []
@@ -226,17 +297,10 @@ class OrchestratorAgent:
             run_id=run_id,
             task_id=state.task_id,
             task_type=decision.task_type,
-            status=(
-                "degraded"
-                if result_status == "blocked"
-                else
-                result_status
-                if result_status in {"planned", "success", "degraded", "failed"}
-                else "success"
-            ),
+            status=_DELIVERY_STATUS_FOR_OUTCOME[outcome],
             pipeline=list(pipeline),
             artifact_refs=list(state.artifacts),
-            summary="The request completed through the integrated Agent Team workflow.",
+            summary=_SUMMARY_FOR_OUTCOME[outcome],
         )
         self._write_delivery(state, report)
         session = self._record_session_turn(

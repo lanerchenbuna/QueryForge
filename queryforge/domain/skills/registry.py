@@ -10,6 +10,10 @@ from typing import Any
 import yaml
 
 
+#: The installed package directory — *not* the workspace root. ``bundled_skills``
+#: ships inside the package (``pyproject.toml`` package-data), so this must stay
+#: relative to ``__file__`` and deliberately differs from
+#: ``queryforge.core.config.PROJECT_ROOT`` (E-22).
 PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SKILLS_DIR = PACKAGE_ROOT / "bundled_skills"
 SKILL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")

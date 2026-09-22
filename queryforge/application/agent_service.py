@@ -65,7 +65,7 @@ LOGGER = logging.getLogger("queryforge.agent_service")
 #: governance-stopped run was relabelled ``cancelled`` and its error text was
 #: replaced by the disconnect reason (H7).
 _PERSISTED_TERMINAL_STATUSES = frozenset(
-    {"completed", "blocked", "failed", "cancelled"}
+    {"completed", "blocked", "failed", "cancelled", "needs_clarification"}
 )
 
 
@@ -882,10 +882,28 @@ class AgentService(ResourceService):
             "tool_loop_max_rounds": options.tool_loop_max_rounds,
             "tool_loop_timeout_seconds": options.tool_loop_timeout_seconds,
             "tool_loop_preview_limit": options.tool_loop_preview_limit,
-            "parallel_candidates": max(
-                options.parallel_candidates,
-                2 if effective_complex else 1,
-            ),
+            # Complexity routing deliberately does NOT raise the candidate count.
+            #
+            # It used to: a "complex" request set parallel_candidates to 2, while
+            # also enabling the tool loop. A controlled ablation over identical
+            # inputs (--parallel-candidates 1 vs 2 in scripts/evaluate_sql.py) found
+            # 20 paired cases with ZERO accuracy difference, ~20% higher p50
+            # latency, and a few percent more tokens. The candidate winner did
+            # execute faster in the engine (0.57ms vs 1.44ms), but the engine is
+            # ~0.03% of an end-to-end run dominated by model latency, so that
+            # gain is ~1ms against ~1550ms of extra work.
+            #
+            # The implicit boost was also frequently wasted outright: the tool
+            # loop runs first, and when it produces SQL the candidate node is
+            # skipped entirely (workflow.py), so ~0.9 avg tool-call rounds per
+            # complex run usually bypassed candidates that had already been paid
+            # for by the complexity decision.
+            #
+            # Candidates remain available as an explicit, opt-in choice for a
+            # caller that has measured a benefit (CLI --parallel-candidates,
+            # AnalyzeRequest, MCP, or AgentOptions). Details:
+            # docs/evaluation_baselines.md, "Multi-candidate ablation".
+            "parallel_candidates": options.parallel_candidates,
             "parallel_max_preview": options.parallel_max_preview,
             "parallel_preview_limit": options.parallel_preview_limit,
             "parallel_preview_timeout_seconds": options.parallel_preview_timeout_seconds,

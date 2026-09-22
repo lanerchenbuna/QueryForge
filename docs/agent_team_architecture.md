@@ -22,9 +22,21 @@ analysis -> candidate -> execution -> completion -> delivery
  DatabaseTool + SQLGlot AST policy
 ```
 
-Every public transport calls `AgentService`. The router classifies the request; the
-orchestrator manages stages, artifacts, state, and delivery; `WorkflowRunner` remains
-the only SQL generation and execution kernel.
+Every public transport reaches one of **two** application services:
+
+- `AgentService` for `/ask`, `/ask/stream`, `/plan`, MCP and the Gateway webhook. The
+  router classifies the request; the orchestrator manages stages, artifacts, state and
+  delivery; `WorkflowRunner` generates and executes the single governed query.
+- `AnalysisPlannerService` for `/analyze` and `queryforge --analyze`. It builds a
+  `AnalysisPlan` from governed metrics, validates it with `PlanValidator`, executes it
+  through `AnalysisExecutor` on the same tool registry, and composes an evidence-backed
+  answer.
+
+`WorkflowRunner` is therefore the SQL kernel for the conversational path, **not** the
+only execution kernel: the planner path reaches `DatabaseTool` through
+`ToolRegistry`. Both paths share `DatabaseTool` and the SQLGlot AST policy as their
+execution boundary and their safety invariants; the orchestration above them differs.
+Unifying that upper layer is tracked work, not a current property.
 
 ## Five Stages
 

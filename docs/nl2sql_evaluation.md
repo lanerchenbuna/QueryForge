@@ -116,10 +116,56 @@ python scripts/evaluate_sql.py \
 - `--min-policy-recall` (default 0.0, disabled): fails when any probe bypasses
   the policy engine.
 
-Token and cost values are explicitly heuristic (`character_count / 4`) because the
-provider adapters do not expose normalized billing usage across all configured model
-vendors. Configure per-million prices only for comparable estimates; do not treat
-them as invoices.
+### Token counts are measured, not estimated
+
+When the provider returns usage, the report records the real counts and sets
+`token_source: "measured"`. Only when a provider exposes no usage at all does the
+report fall back to the `character_count / 4` heuristic and set
+`token_source: "estimated"`. Read the field before quoting a number: an `estimated`
+figure cannot support a cost conclusion.
+
+Per-million prices are configured for comparable estimates only. Treat cost as an
+indicator of relative expense, never as an invoice.
+
+## Frozen Baselines
+
+`evaluation/reports/` is gitignored, so raw evaluator output has no versioned carrier.
+The numbers below are the tracked record; each row names the report file it came from.
+**A baseline is only current if its versions are unchanged** — change the model, the gold
+set, the semantic model, the SQL policy, or the comparison rules, and these become
+historical.
+
+Versions: provider `deepseek`, model `deepseek-v4-flash`, gold set
+`evaluation/gold/nl2sql_multidomain.jsonl` (first 40 = `anime_content`), semantic model
+`sample_data/anime_streaming/semantic_model.yml`.
+
+| Run (report file) | `semantic_correctness_rate` | `sql_execution_success_rate` | `p50_latency_ms` | In / out tokens |
+|---|---|---|---|---|
+| `nl2sql_skill_auto.json` — automatic skill selection | 0.84375 | 1.0 | 12260 | 1742 / 633 |
+| `nl2sql_model_eval.json` — skills inactive | 0.875 | 1.0 | 5138 | 1446 / 438 |
+| `nl2sql_selfverify2.json` — after reasoning-payload and prompt fixes | 0.875 | 1.0 | 11728 | 1734 / 579 |
+| `nl2sql_defects_fixed2.json` — after the governance defect pass | 0.875 | 1.0 | 13906 | 1754 / 866 |
+
+> **These are single runs of 40 cases.** Differences of ±0.03 in
+> `semantic_correctness_rate` have been observed across *identical* code, so the three
+> 0.875 rows are the same result, not three improvements. Do not present a delta of that
+> size as a gain; raise `--repeat` until the interval separates.
+
+Two findings worth carrying forward, both from controlled comparisons rather than
+aggregate impressions:
+
+- **Automatic skill selection costs p50 +139% and output tokens +44%** (12260 ms vs 5138 ms;
+  633 vs 438) with no demonstrated accuracy benefit. `--skill-mode auto|off` exists to test
+  this; it is unresolved, not settled.
+- **A second SQL candidate does not improve accuracy and costs ~20% p50 latency.** Measured
+  over 20 paired cases with candidate count forced, not grouped by the gold set's
+  `candidate_selection` flag (which correlates perfectly with task category and therefore
+  measures difficulty). Parallel candidates remain an explicit opt-in.
+
+A real-model run spends money. Confirm the account balance first: a depleted balance returns
+HTTP 402, which the evaluator classifies as `environment_error` and excludes from the
+accuracy denominators.
+
 
 ## Maintain the Gold Set
 

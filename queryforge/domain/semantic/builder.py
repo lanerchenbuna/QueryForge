@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from queryforge.core.paths import workspace_root
 from queryforge.core.schemas.models import TableColumn, TableSchema
 from queryforge.domain.semantic.contract_validator import SemanticContractValidator
 from queryforge.domain.semantic.model import SemanticModelLoader
@@ -37,7 +38,10 @@ MEASURE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 TECHNICAL_PREFIXES = ("dim_", "fact_", "bridge_", "stg_", "raw_")
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+#: Workspace root, used only to make emitted paths portable (``_portable_path``).
+#: Resolved rather than ``parents[3]`` so an installed package does not classify
+#: every path as "not portable" against ``site-packages`` (E-22).
+PROJECT_ROOT = workspace_root()
 
 
 class SemanticBuildError(ValueError):

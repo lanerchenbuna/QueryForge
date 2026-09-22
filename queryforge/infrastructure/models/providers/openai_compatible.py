@@ -30,13 +30,21 @@ class OpenAICompatibleProvider(BaseModelProvider):
         return {}
 
     def generate_with_messages(
-        self, messages: list[Message], json_mode: bool = False
+        self,
+        messages: list[Message],
+        json_mode: bool = False,
+        timeout: float | None = None,
     ) -> str:
         request: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": 0.1,
         }
+        if timeout is not None:
+            # Bound the request by the run's remaining deadline. A tiny positive
+            # floor avoids asking the SDK for an immediate timeout, which would
+            # turn "barely any time left" into a misleading instant failure.
+            request["timeout"] = max(0.1, float(timeout))
         if json_mode and self.supports_response_format:
             request["response_format"] = {"type": "json_object"}
         # Step 14: a fresh call starts with no measured usage, so a response that

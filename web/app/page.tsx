@@ -3955,7 +3955,7 @@ function UploadModal({
               className="visually-hidden"
               type="file"
               multiple
-              accept=".sqlite,.db,.csv,.parquet"
+              accept=".csv,.parquet"
               onChange={handleFiles}
             />
             {files.length > 0 && (

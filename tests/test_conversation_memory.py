@@ -96,6 +96,80 @@ class ConversationMemoryTest(unittest.TestCase):
                 self.assertEqual(rewrite["reason"], expected_reason)
                 self.assertIn(memory.last_question, str(rewrite["question"]))
 
+    def test_followup_rules_do_not_depend_on_whitespace_after_a_cjk_marker(self):
+        """D-3: "按地区" is one unspaced run and used to be invisible.
+
+        The CJK markers required whitespace after the marker, so "按地区" and
+        "只看华东" were not recognised while "按 地区" and "只看 华东" were. A bare
+        follow-up then reached the router as a brand-new question; on the
+        benchmark's only multi-turn case the model answered by inventing a set of
+        metrics it had not been asked for.
+        """
+        memory = SessionMemory(
+            session_id="cjk_rules",
+            last_question="Show revenue by region for last month",
+        )
+        cases = {
+            "按地区": "add_dimension",
+            "按 地区": "add_dimension",
+            "按照地区": "add_dimension",
+            "只看华东": "add_filter",
+            "只看 华东": "add_filter",
+            "仅看华东": "add_filter",
+            "加上评分": "add_metric",
+            "去掉地区": "remove_dimension_or_metric",
+        }
+        for question, expected_reason in cases.items():
+            with self.subTest(question=question):
+                rewrite = ProductAnalystAgent.rewrite_followup(question, memory)
+                self.assertTrue(rewrite["is_followup"])
+                self.assertEqual(rewrite["reason"], expected_reason)
+
+    def test_bare_repeat_request_reissues_the_previous_question(self):
+        """D-3: "再查一次" carries no new content and must re-issue the prior ask."""
+        memory = SessionMemory(
+            session_id="repeat",
+            last_question="order count",
+        )
+        for question in ("再查一次", "再查一遍", "重新查一次", "再来一次", "再跑一次"):
+            with self.subTest(question=question):
+                rewrite = ProductAnalystAgent.rewrite_followup(question, memory)
+                self.assertTrue(rewrite["is_followup"])
+                self.assertEqual(rewrite["reason"], "repeat_previous_request")
+                self.assertIn("order count", str(rewrite["question"]))
+
+    def test_a_complete_instruction_is_not_absorbed_as_a_followup(self):
+        """Making the CJK separator optional must not swallow a standalone ask.
+
+        "按门店统计订单数" matches the breakdown marker but carries its own verb,
+        so it is a fresh question rather than a fragment to attach to the previous
+        one. Absorbing it would silently discard the user's new instruction.
+        """
+        memory = SessionMemory(
+            session_id="instruction",
+            last_question="Show revenue by region for last month",
+        )
+        for question in (
+            "按门店统计订单数",
+            "按地区计算平均评分",
+            "查询订单总额",
+            "统计每个类别的订单数",
+        ):
+            with self.subTest(question=question):
+                rewrite = ProductAnalystAgent.rewrite_followup(question, memory)
+                self.assertFalse(rewrite["is_followup"])
+
+    def test_reference_followup_matches_cjk_phrases_inside_longer_text(self):
+        """``\\b`` cannot anchor CJK, so mid-sentence reference phrases were missed."""
+        memory = SessionMemory(
+            session_id="reference",
+            last_question="Show revenue by region for last month",
+        )
+        for question in ("那个结果再按地区", "上一个结果再查一次", "刚才那个"):
+            with self.subTest(question=question):
+                rewrite = ProductAnalystAgent.rewrite_followup(question, memory)
+                self.assertTrue(rewrite["is_followup"])
+
     def test_followup_is_rewritten_persisted_and_does_not_store_rows(self):
         service = self.service()
         first = service.ask(

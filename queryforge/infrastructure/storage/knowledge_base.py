@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from queryforge.core.paths import workspace_root
 from queryforge.core.schemas.models import SQLContext, TableSchema
 from queryforge.domain.knowledge import (
     GovernedDocument,
@@ -27,7 +28,7 @@ from queryforge.infrastructure.storage.vector_store import (
 
 
 SQL_SOURCE_TYPES = ("sql_history", "reference_sql", "reference_template", "success_story")
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = workspace_root()
 #: Gold/evaluation tasks whose questions and reference SQL must never enter the
 #: knowledge base that answers them: indexing the holdout set would invalidate the
 #: benchmark it belongs to, because a few-shot example could then be the answer
@@ -677,6 +678,16 @@ class KnowledgeBaseBuilder:
                     continue
                 explanation = (row.get("evidence") or "").strip()
                 tables = SQLHistoryStore.extract_tables(sql)
+                # Trust is gated on a named reviewer, matching
+                # ``SQLHistoryStore.import_success_stories``. This path used to
+                # stamp every row ``human_reviewed`` unconditionally, so any CSV
+                # with question/sql columns entered the knowledge base as trusted
+                # few-shot material without anyone having reviewed it — the
+                # opposite of what the three-tier verification model in
+                # ``domain/knowledge/governance.py`` exists for.
+                reviewer = str(
+                    row.get("reviewer") or row.get("reviewed_by") or ""
+                ).strip()
                 documents.append(
                     VectorDocument.create(
                         id=KnowledgeBaseBuilder._id("success_story", str(path), str(index), question, sql),
@@ -691,9 +702,16 @@ class KnowledgeBaseBuilder:
                             "explanation": explanation,
                             "tables_used": tables,
                             "row": row,
-                            "verification_level": VerificationLevel.human_reviewed.value,
-                            "review_status": "reviewed",
-                            "owner": str(row.get("owner") or "business"),
+                            # Unreviewed rows stay execution_success: the SQL ran,
+                            # which says nothing about business correctness.
+                            "verification_level": (
+                                VerificationLevel.human_reviewed.value
+                                if reviewer
+                                else VerificationLevel.execution_success.value
+                            ),
+                            "review_status": "reviewed" if reviewer else "draft",
+                            "reviewer": reviewer or None,
+                            "owner": reviewer or str(row.get("owner") or "business"),
                             "version": row.get("version"),
                         },
                     )

@@ -21,6 +21,11 @@ TaskStatus = Literal[
     "blocked",
     "failed",
     "completed",
+    # A run that stopped to ask the user a question (reflection returned
+    # NEED_USER_REVIEW, or the planner could not resolve a governed metric) is
+    # terminal for this attempt but is neither a success nor a failure. The value
+    # has to stay in this vocabulary so the persisted state round-trips.
+    "needs_clarification",
     # A run stopped because its client went away (step 14) is persisted with this
     # status by ``agent_service.persist_cancelled_outcome``. The value has to stay
     # in this vocabulary, otherwise the cancelled ``state.json`` cannot be

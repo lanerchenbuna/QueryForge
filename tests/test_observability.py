@@ -236,3 +236,47 @@ class ObservabilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerNodeLatencyBreakdownTest(unittest.TestCase):
+    """``by_node`` attributes model cost to the node that issued it.
+
+    A run's wall clock is dominated by sequential model calls, so the run-level
+    total cannot say which step to optimise. Each model span is opened inside a node
+    span carrying the node name, which is enough to attribute the cost without new
+    instrumentation.
+    """
+
+    def test_model_cost_is_grouped_by_node(self):
+        from queryforge.core.observability import SpanRecorder
+
+        from queryforge.core.observability import node_logging_context
+
+        recorder = SpanRecorder("by_node_probe")
+        # Production opens model spans inside ``node_logging_context`` (see
+        # ``workflow._execute_observed_node``), which is what attributes them.
+        for node in ("gen_sql", "gen_sql", "reflect"):
+            with node_logging_context(node):
+                span = recorder.begin(f"{node}.model", "model")
+                recorder.end(span, status="success")
+        summary = recorder.latency_summary(end_to_end_ms=1000.0)
+        by_node = summary["by_node"]
+        self.assertIn("gen_sql", by_node)
+        self.assertIn("reflect", by_node)
+        self.assertEqual(by_node["gen_sql"]["model_calls"], 2)
+        self.assertEqual(by_node["reflect"]["model_calls"], 1)
+        # Ordered by model time, descending, so the biggest cost is first.
+        self.assertEqual(list(by_node), ["gen_sql", "reflect"])
+        self.assertIn("prompt_tokens", by_node["gen_sql"])
+
+    def test_non_model_spans_are_excluded_from_the_node_breakdown(self):
+        from queryforge.core.observability import SpanRecorder
+
+        from queryforge.core.observability import node_logging_context
+
+        recorder = SpanRecorder("by_node_probe2")
+        with node_logging_context("execute_sql"):
+            span = recorder.begin("sql.execute", "sql")
+            recorder.end(span, status="success")
+        summary = recorder.latency_summary(end_to_end_ms=1.0)
+        self.assertEqual(summary["by_node"], {})

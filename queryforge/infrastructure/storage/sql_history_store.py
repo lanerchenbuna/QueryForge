@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable
 
+from queryforge.core.paths import workspace_root
 from queryforge.core.schemas.models import HistoryMatch
 from queryforge.domain.knowledge import (
     VerificationLevel,
@@ -22,7 +23,7 @@ from queryforge.domain.knowledge import (
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = workspace_root()
 DEFAULT_HISTORY_DB_PATH = PROJECT_ROOT / ".queryforge/history.db"
 #: Hard bound on the rows one search may scan. Similarity is scored in Python, so
 #: the candidate window must be bounded; it is explicit (constructor override) and
@@ -548,7 +549,7 @@ class SQLHistoryStore:
                         skipped += 1
                         continue
                     try:
-                        sql = DatabaseTool.validate_readonly_sql(sql)
+                        sql = DatabaseTool.validate_readonly_shape(sql)
                     except UnsafeSQLError:
                         skipped += 1
                         continue
@@ -604,7 +605,7 @@ class SQLHistoryStore:
                 raise SQLHistoryError(f"Could not read reference SQL {file}: {exc}") from exc
             for index, (comments, sql) in enumerate(self._parse_reference_text(text), 1):
                 try:
-                    sql = DatabaseTool.validate_readonly_sql(sql)
+                    sql = DatabaseTool.validate_readonly_shape(sql)
                 except UnsafeSQLError:
                     skipped += 1
                     continue

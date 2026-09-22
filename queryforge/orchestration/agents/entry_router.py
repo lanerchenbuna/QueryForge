@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from queryforge.orchestration.schemas import RoutingDecision, TaskType
 
@@ -128,8 +129,38 @@ class EntryRouterAgent:
         return "ask_sql", 0.75, "Defaulted a data question to the ask_sql pipeline."
 
     @staticmethod
-    def _contains(text: str, markers: tuple[str, ...]) -> bool:
-        return any(marker in text for marker in markers)
+    @lru_cache(maxsize=256)
+    def _marker_regex(marker: str) -> "re.Pattern[str]":
+        """Match a marker with arbitrary whitespace between its characters.
+
+        ``route`` normalises the input with ``" ".join(text.split())``, which
+        collapses runs of whitespace but cannot remove a single space inside a
+        Chinese phrase. The marker tables were therefore internally inconsistent:
+        ``_SQL_REVIEW_MARKERS`` and ``_TROUBLESHOOT_MARKERS`` spelled each Chinese
+        marker twice ("审核sql" and "审核 sql") while ``_REPORT_MARKERS``,
+        ``_METADATA_MARKERS`` and ``_EXPLAIN_MARKERS`` listed only the unspaced
+        form — so "生成 报告" fell through to the default ``ask_sql`` while
+        "审核 sql" worked. Spelling every variant twice is unbounded (two spaces?
+        three?), so the separator is made whitespace-tolerant instead.
+        """
+
+        pattern = r"\s*".join(re.escape(char) for char in marker)
+        # An ASCII marker must match on a word boundary, or a bare keyword inside a
+        # longer identifier routes the whole request: "report" matched
+        # "sales_report", so "Show the first 10 rows of sales_report" was classified
+        # as a report-building task and the run skipped straight to report
+        # generation. CJK has no such boundary concept, so the anchors are applied
+        # only when the marker both starts and ends with an ASCII word character —
+        # which also leaves phrases like "sql review" matching as written.
+        ends_word = re.search(r"\w$", marker) is not None
+        starts_word = re.match(r"\w", marker) is not None
+        if marker.isascii() and starts_word and ends_word:
+            pattern = rf"\b{pattern}\b"
+        return re.compile(pattern)
+
+    @classmethod
+    def _contains(cls, text: str, markers: tuple[str, ...]) -> bool:
+        return any(cls._marker_regex(marker).search(text) for marker in markers)
 
     @classmethod
     def _complexity(

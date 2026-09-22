@@ -29,6 +29,7 @@ from queryforge.workflow.node.skill_selection_node import SkillSelectionNode
 from queryforge.workflow.node.subject_selection_node import SubjectSelectionNode
 from queryforge.workflow.node.tool_loop_node import ToolLoopNode
 from queryforge.workflow.node.visualization_node import VisualizationNode
+from queryforge.workflow.budgeted_model import BudgetedModelProvider
 from queryforge.workflow.event_emitter import EventEmitter
 from queryforge.workflow.workflow import (
     ReflectiveWorkflow,
@@ -50,7 +51,13 @@ from queryforge.core.observability import (
     stable_digest,
     start_span_recorder,
 )
-from queryforge.core.schemas.models import Context, SQLContext, SqlTask, VectorMatch
+from queryforge.core.schemas.models import (
+    Context,
+    RunContext,
+    SQLContext,
+    SqlTask,
+    VectorMatch,
+)
 from queryforge.domain.security import load_sql_policy
 from queryforge.domain.skills.manager import SkillManager
 from queryforge.infrastructure.storage import (
@@ -312,6 +319,8 @@ class WorkflowRunner:
         tool_loop_preview_limit: int = 20,
         tool_budget_manager: BudgetManager | None = None,
         tool_budget_limits: dict[str, float] | None = None,
+        model_budget_manager: BudgetManager | None = None,
+        model_budget_limits: dict[str, float] | None = None,
         parallel_candidates: int = 1,
         parallel_max_preview: int = 2,
         parallel_preview_limit: int = 20,
@@ -373,6 +382,11 @@ class WorkflowRunner:
         # Step 09: the tool loop shares one atomic budget per run.
         self.tool_budget_manager = tool_budget_manager
         self.tool_budget_limits = dict(tool_budget_limits or {})
+        # Separate from the tool budget on purpose: tool calls and model calls are
+        # different resources with different failure modes, and sharing one
+        # allowance would let a long tool loop silently starve generation.
+        self._model_budget_manager = model_budget_manager
+        self.model_budget_limits = dict(model_budget_limits or {})
         if parallel_candidates < 1 or parallel_candidates > 3:
             raise ValueError("parallel_candidates must be between 1 and 3")
         self.parallel_candidates = parallel_candidates
@@ -491,6 +505,14 @@ class WorkflowRunner:
         retrieval_scope = self._retrieval_scope()
         if retrieval_scope:
             context.task_context["retrieval_scope"] = retrieval_scope
+        # Unified run identity + versions, populated once here so downstream
+        # consumers (artifacts, evidence, recovery) read one object instead of
+        # reconstructing identity and versions from whichever layer is asking.
+        context.run_context = RunContext.from_context(
+            context,
+            domain_id=self.history_domain_id,
+            data_version=self.history_data_version,
+        )
         if self.initial_sql:
             context.sql_context = SQLContext(
                 sql=self.initial_sql,
@@ -515,13 +537,24 @@ class WorkflowRunner:
             context.sql_policy = database_tool.policy_summary
             context.task_context["sql_dialect"] = database_tool.dialect
             raw_llm = self.llm_factory(self.config)
-            llm = ObservedModelProvider(
+            observed_llm = ObservedModelProvider(
                 raw_llm,
                 provider_name=self.config.llm_provider,
                 model_name=self.config.llm_model,
                 debug_prompts=self.debug_prompts,
                 trace_dir=self.trace_dir,
             )
+            # Every model call on this path is charged to one shared budget, and
+            # the run's remaining deadline reaches the adapter (see
+            # workflow/budgeted_model.py). Previously only the tool loop and the
+            # planner had a budget, so /ask model spend was unbounded.
+            model_budget = self.model_budget_manager()
+            budget_refusal: dict[str, Any] = {}
+            llm = BudgetedModelProvider(
+                observed_llm, model_budget, refusal_sink=budget_refusal
+            )
+            context.model_budget = model_budget
+            context.budget_refusal = budget_refusal
             vector_store = self.vector_store
             if self.enable_vector_kb and vector_store is None:
                 try:
@@ -692,6 +725,15 @@ class WorkflowRunner:
                         "agent_completion", str(exc), context
                     ) from exc
             return output, context
+
+    def model_budget_manager(self) -> BudgetManager:
+        """The per-run budget that bounds every model call."""
+
+        if self._model_budget_manager is None:
+            self._model_budget_manager = BudgetManager(
+                limits=self.model_budget_limits or None
+            )
+        return self._model_budget_manager
 
     def _tool_budget_manager(self) -> BudgetManager:
         """Return the per-run budget manager used by the bounded tool loop."""

@@ -131,7 +131,18 @@ def knowledge_retrieval_version_refs(
         if kind is None:
             continue
         identifier = _governed_identifier(document, kind)
-        version = content_version(str(_field(document, "text") or ""))
+        # Digest the governance state alongside the text. ``content_version``'s own
+        # docstring promises that "any edit to a definition, a synonym, an owner or
+        # a review status changes it", but only the retrieval text was passed, and
+        # that text contains none of these fields: demoting an entry to
+        # ``deprecated`` or narrowing its permissions left the version identical, so
+        # no session was told its knowledge had changed. Each part is hashed
+        # separately by ``content_version``, so adding parts cannot collide with a
+        # different partition of the same content.
+        version = content_version(
+            str(_field(document, "text") or ""),
+            *_governance_parts(document),
+        )
         if not identifier or not version:
             continue
         references.append(
@@ -164,6 +175,41 @@ def merge_version_refs(
             seen.add(key)
             merged.append(reference)
     return merged
+
+
+#: Governance fields that must participate in a content version. Order is fixed so
+#: the digest is stable.
+_GOVERNANCE_VERSION_KEYS: tuple[str, ...] = (
+    "review_status",
+    "verification_level",
+    "permissions",
+    "domain_id",
+    "owner",
+)
+
+
+def _governance_parts(document: Any) -> list[str]:
+    """The governance state of one document, as digestable strings.
+
+    Only values that are actually set contribute, so an absent permission list does
+    not make two otherwise-identical documents differ from a document that never
+    carried the key at all.
+    """
+
+    metadata = _field(document, "metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    parts: list[str] = []
+    for key in _GOVERNANCE_VERSION_KEYS:
+        value = metadata.get(key, _field(document, key))
+        if value in (None, "", [], ()):
+            continue
+        if isinstance(value, (list, tuple, set)):
+            rendered = ",".join(sorted(str(item) for item in value))
+        else:
+            rendered = str(value)
+        parts.append(f"{key}={rendered}")
+    return parts
 
 
 def _field(document: Any, name: str) -> Any:

@@ -21,7 +21,7 @@ aspirational.
 
 This module imports nothing but the standard library and pydantic: the evaluator
 must not be able to share a bug with the code it grades (see
-``tests/test_evaluation_isolation.py``).
+``tests/test_agent_task_gold.py::test_evaluator_does_not_import_runtime_being_graded``).
 """
 
 from __future__ import annotations

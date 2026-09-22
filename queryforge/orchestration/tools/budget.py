@@ -184,6 +184,41 @@ class BudgetManager:
                 0.0, float(getattr(self.limits, key)) - float(getattr(self._usage, key))
             )
 
+    def restore(self, usage: Mapping[str, Any] | None) -> list[str]:
+        """Re-apply a previously persisted usage snapshot.
+
+        A resumed run must inherit what the earlier attempt already spent,
+        otherwise the budget boundary resets on every resume and a run can spend
+        its whole allowance again after a crash. Returns the keys that were
+        restored, so a caller can report what carried over rather than assuming.
+
+        Values are clamped to the configured limits: a snapshot that exceeds the
+        current limits (because they were tightened) must not leave the manager in
+        a state where ``remaining`` is negative and nothing can run.
+        """
+
+        if not usage:
+            return []
+        applied: list[str] = []
+        with self._lock:
+            for key in BUDGET_KEYS:
+                if key not in usage:
+                    continue
+                try:
+                    amount = float(usage[key])
+                except (TypeError, ValueError):
+                    continue
+                if amount <= 0:
+                    continue
+                limit = float(getattr(self.limits, key))
+                # Preserve the spent amount, but never above the limit: the point
+                # is that the allowance is consumed, not that it is invalid.
+                setattr(self._usage, key, min(amount, limit) if limit > 0 else amount)
+                applied.append(key)
+            if applied:
+                self._reservations += 1
+        return applied
+
     def snapshot(self) -> dict[str, Any]:
         """Serialize limits, usage, and remaining budget for a result payload."""
 

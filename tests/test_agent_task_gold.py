@@ -59,10 +59,21 @@ class TaskGoldTest(unittest.TestCase):
         self.assertEqual(recompute(report,selected)['task_success_rate'],1)
 
     def test_evaluator_does_not_import_runtime_being_graded(self):
-        for p in (ROOT/'queryforge/evaluation').glob('*.py'):
+        # The evaluator must not import the machinery it grades, or a change to
+        # the runtime could silently change what "passing" means. Check plain
+        # `import` as well as `from ... import`, and recurse into subpackages:
+        # ast.walk already descends into function/class bodies.
+        forbidden=('queryforge.application','queryforge.workflow','queryforge.orchestration','queryforge.interfaces')
+        checked=0
+        for p in sorted((ROOT/'queryforge/evaluation').rglob('*.py')):
+            checked+=1
             for node in ast.walk(ast.parse(p.read_text())):
                 if isinstance(node,ast.ImportFrom):
-                    self.assertFalse((node.module or '').startswith(('queryforge.application','queryforge.workflow','queryforge.orchestration','queryforge.interfaces')),str(p))
+                    self.assertFalse((node.module or '').startswith(forbidden),f'{p}:{node.lineno}')
+                elif isinstance(node,ast.Import):
+                    for a in node.names:
+                        self.assertFalse(a.name.startswith(forbidden),f'{p}:{node.lineno}')
+        self.assertGreater(checked,0,'the evaluator package was not found')
 
     def test_live_dispatch_does_not_use_planner_or_reference_sql(self):
         spec=next(s for s in self.specs if s.expected_outcome=='query')
