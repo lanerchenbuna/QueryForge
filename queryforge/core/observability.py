@@ -21,8 +21,10 @@ from typing import Any, Callable, Iterator
 
 from dotenv import load_dotenv
 
+from queryforge.core.paths import workspace_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+PROJECT_ROOT = workspace_root()
 DEFAULT_LOG_PATH = PROJECT_ROOT / ".queryforge/logs/queryforge.log"
 DEFAULT_TRACE_DIR = PROJECT_ROOT / ".queryforge/traces"
 _RUN_ID = ContextVar("queryforge_run_id", default="-")
@@ -706,7 +708,14 @@ class SpanRecorder:
         }
 
     def latency_summary(self, *, end_to_end_ms: float | None = None) -> dict[str, Any]:
-        """Per-kind latency breakdown plus the run's end-to-end duration."""
+        """Per-kind latency breakdown plus the run's end-to-end duration.
+
+        ``by_node`` aggregates the *model* spans by the node that issued them. A
+        run's wall clock is dominated by sequential model calls, so the run-level
+        total cannot say which step to optimise; each node span carries its
+        ``node`` attribute and each model span is opened inside one, which is
+        enough to attribute the cost without new instrumentation.
+        """
 
         with self._lock:
             spans = list(self._spans)
@@ -714,6 +723,7 @@ class SpanRecorder:
             kind: {"count": 0, "duration_ms": 0.0, "max_duration_ms": 0.0}
             for kind in SPAN_KINDS
         }
+        by_node: dict[str, dict[str, Any]] = {}
         for span in spans:
             entry = by_kind.setdefault(
                 span.kind, {"count": 0, "duration_ms": 0.0, "max_duration_ms": 0.0}
@@ -721,11 +731,43 @@ class SpanRecorder:
             entry["count"] += 1
             entry["duration_ms"] = round(entry["duration_ms"] + span.duration_ms, 3)
             entry["max_duration_ms"] = max(entry["max_duration_ms"], span.duration_ms)
+
+            if span.kind != "model":
+                continue
+            node = str(span.node_name or (span.attributes or {}).get("node") or "unknown")
+            node_entry = by_node.setdefault(
+                node,
+                {
+                    "model_calls": 0,
+                    "model_duration_ms": 0.0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                },
+            )
+            node_entry["model_calls"] += 1
+            node_entry["model_duration_ms"] = round(
+                node_entry["model_duration_ms"] + span.duration_ms, 3
+            )
+            usage = span.usage
+            if usage is not None:
+                node_entry["prompt_tokens"] += int(
+                    getattr(usage, "prompt_tokens", 0) or 0
+                )
+                node_entry["completion_tokens"] += int(
+                    getattr(usage, "completion_tokens", 0) or 0
+                )
+        ordered = {
+            name: by_node[name]
+            for name in sorted(
+                by_node, key=lambda key: by_node[key]["model_duration_ms"], reverse=True
+            )
+        }
         if end_to_end_ms is None:
             end_to_end_ms = self._span_window_ms(spans)
         return {
             "end_to_end_ms": end_to_end_ms,
             "by_kind": by_kind,
+            "by_node": ordered,
             "span_count": len(spans),
         }
 
@@ -1029,6 +1071,75 @@ def _isolate_usage_slot(provider: Any) -> bool:
     return True
 
 
+#: Seconds remaining on the run's model deadline for the *current* call.
+#:
+#: A ContextVar rather than a parameter: the provider interface is implemented by
+#: several adapters and called from seven decision points, and threading a new
+#: keyword through all of them would be a wide change for a value that is
+#: ambient per call. It also propagates into threads that inherit the context
+#: (parallel candidates, the tool loop), which is where a deadline matters most.
+#: ``None`` means no deadline was declared, which is different from "no time left".
+_MODEL_DEADLINE_SECONDS: ContextVar[float | None] = ContextVar(
+    "queryforge_model_deadline_seconds", default=None
+)
+
+
+def current_model_deadline() -> float | None:
+    """Remaining seconds for the in-flight model call, or None when unbounded."""
+
+    return _MODEL_DEADLINE_SECONDS.get()
+
+
+class model_deadline:
+    """Set the remaining model deadline for calls made inside the block.
+
+    A non-positive deadline raises :class:`BudgetDeadlineExceeded` before any
+    request is sent, so an exhausted run does not pay for a call it cannot use.
+    """
+
+    def __init__(self, seconds: float | None) -> None:
+        self.seconds = None if seconds is None else float(seconds)
+        self._token: Any = None
+
+    def __enter__(self) -> "model_deadline":
+        if self.seconds is not None:
+            if self.seconds <= 0:
+                raise BudgetDeadlineExceeded(
+                    "run deadline exhausted before the model call was sent"
+                )
+            self._token = _MODEL_DEADLINE_SECONDS.set(self.seconds)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._token is not None:
+            _MODEL_DEADLINE_SECONDS.reset(self._token)
+            self._token = None
+
+
+class BudgetDeadlineExceeded(RuntimeError):
+    """The run's model deadline was already exhausted when a call was attempted."""
+
+
+def _call_with_optional_timeout(operation: Any, prompt: str, timeout: float | None) -> Any:
+    """Call ``operation(prompt)``, adding ``timeout`` only if it accepts one.
+
+    Providers and decorators are duck-typed here, so a callee that has no
+    ``timeout`` parameter must keep working unchanged.
+    """
+
+    if timeout is None:
+        return operation(prompt)
+    try:
+        import inspect
+
+        parameters = inspect.signature(operation).parameters
+    except (TypeError, ValueError):
+        return operation(prompt)
+    if "timeout" in parameters:
+        return operation(prompt, timeout=timeout)
+    return operation(prompt)
+
+
 class ObservedModelProvider:
     """Duck-typed provider decorator that records summaries, never prompts by default.
 
@@ -1078,23 +1189,44 @@ class ObservedModelProvider:
         self._inflight_lock = threading.Lock()
 
     def generate_json(self, prompt: str) -> dict[str, Any]:
+        # The adapter is delegated to for its own JSON handling, but if the wrapped
+        # provider is itself a decorator (the budget wrapper) it needs the ambient
+        # deadline to bound the request. Passing it when the callee accepts it
+        # keeps decorator stacking working without changing the adapter contract.
         return self._observe(
-            "generate_json", prompt, lambda: self._provider.generate_json(prompt)
+            "generate_json",
+            prompt,
+            lambda: _call_with_optional_timeout(
+                self._provider.generate_json, prompt, current_model_deadline()
+            ),
         )
 
     def generate_text(self, prompt: str) -> str:
         return self._observe(
-            "generate_text", prompt, lambda: self._provider.generate_text(prompt)
+            "generate_text",
+            prompt,
+            lambda: _call_with_optional_timeout(
+                self._provider.generate_text, prompt, current_model_deadline()
+            ),
         )
 
     def generate_with_messages(
-        self, messages: list[dict[str, str]], json_mode: bool = False
+        self,
+        messages: list[dict[str, str]],
+        json_mode: bool = False,
+        timeout: float | None = None,
     ) -> str:
         prompt = json.dumps(messages, ensure_ascii=False)
         return self._observe(
             "generate_with_messages",
             prompt,
-            lambda: self._provider.generate_with_messages(messages, json_mode=json_mode),
+            lambda: self._provider.generate_with_messages(
+                messages,
+                json_mode=json_mode,
+                # An explicit argument wins; otherwise the ambient run deadline
+                # applies, so a caller that sets nothing still gets bounded.
+                timeout=timeout if timeout is not None else current_model_deadline(),
+            ),
         )
 
     def __getattr__(self, name: str) -> Any:

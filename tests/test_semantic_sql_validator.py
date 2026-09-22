@@ -975,3 +975,63 @@ class RepeatedSqlCycleWorkflowTest(FixtureMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultFilterWithoutColumnTest(FixtureMixin, unittest.TestCase):
+    """E-06: a filter that parses but names no column must not crash ``validate``.
+
+    ``_default_filter_expectations`` returns ``(None, None)`` for such a filter —
+    for example ``EXISTS(SELECT 1 FROM fact_sales.is_valid)`` — while its type
+    annotation claimed ``list``. The caller trusted the annotation and passed the
+    ``None`` to ``set(columns)``, raising ``TypeError`` out of ``validate()``.
+    That escapes the node's try block, so the semantic gate crashed outright
+    instead of returning a verdict, taking the run down with it.
+    """
+
+    def _validator_for(self, default_filters: list[str]):
+        import copy
+
+        import yaml
+
+        model = copy.deepcopy(SEMANTIC_MODEL)
+        model["metrics"][0]["default_filters"] = default_filters
+        path = self.root / "default_filter_model.yml"
+        path.write_text(yaml.safe_dump(model, sort_keys=False), encoding="utf-8")
+        semantic = SemanticModelLoader.load_and_validate(
+            path, self.schemas, "What are net sales?"
+        )
+        context = Context(
+            task=SqlTask(question="What are net sales?", database_path=str(self.database)),
+            semantic_model=semantic,
+            metric_matches=SemanticModelLoader.match_metrics(
+                semantic.model, "What are net sales?"
+            ),
+        )
+        return SemanticSQLValidator.for_context(context)
+
+    def test_a_filter_naming_no_column_returns_a_verdict(self):
+        validator = self._validator_for(
+            ["EXISTS(SELECT 1 FROM fact_sales.is_valid)"]
+        )
+        # Must not raise: this is the whole point of the regression.
+        result = validator.validate(
+            "SELECT SUM(s.amount) AS net_sales FROM fact_sales s"
+        )
+        self.assertEqual(result.status, "violation")
+        self.assertIn("default_filter", result.rule_names)
+        self.assertIn("references no column", result.error_message())
+
+    # Note: the ``expected is None`` branch (a filter that does not even parse) is
+    # not reachable from a loaded semantic model — ``models.py`` rejects a filter
+    # without a qualified ``table.column`` reference at load time — so there is no
+    # test for it here. The reachable-``None`` case is the one above: a filter that
+    # parses and references a qualified column inside a subquery, yet contributes
+    # no column that the validator can look for in the SQL under test.
+
+    def test_a_well_formed_filter_still_validates_normally(self):
+        """The guard must not disturb the ordinary path."""
+        validator = self._validator_for(["fact_sales.is_valid = 1"])
+        result = validator.validate(
+            "SELECT SUM(s.amount) AS net_sales FROM fact_sales s WHERE s.is_valid = 1"
+        )
+        self.assertEqual(result.status, "passed")

@@ -54,11 +54,17 @@ class RecordingKnowledgeBaseBuilder:
         self.manifest_path = manifest_path
         self.schemas = None
         self.sources = None
+        self.knowledge = None
         RecordingKnowledgeBaseBuilder.last = self
 
-    def rebuild(self, *, history_store, schemas, sources) -> dict:
+    def rebuild(self, *, history_store, schemas, sources, knowledge=None) -> dict:
         self.schemas = list(schemas)
         self.sources = list(sources)
+        # Recorded so a test can assert the governed path is actually reachable
+        # from the CLI. Previously `knowledge` was never passed, so
+        # build_governed_documents (verification tiers, conflict detection,
+        # holdout isolation) only ever ran in tests.
+        self.knowledge = knowledge
         return {"documents": len(self.schemas), "sources": len(self.sources)}
 
     @property
@@ -156,6 +162,97 @@ class CliKnowledgeBaseGovernanceTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertNotIn("email", builder.document_text)
         self.assertIn("user_handle", builder.document_text)
+
+    # ---------------------------------------------------------- governed knowledge (E-05)
+
+    def test_rebuild_without_knowledge_leaves_the_governed_path_unused(self):
+        """Documents the gap this flag closes: with no knowledge source the CLI
+        never reaches build_governed_documents."""
+        config = self.config(sql_policy_path=str(ANIME_POLICY))
+        exit_code, builder = self.run_rebuild(
+            config,
+            [
+                "--rebuild-vector-kb",
+                "--database",
+                str(ANIME_DATABASE),
+                "--kb-source",
+                str(ANIME_SOURCE),
+            ],
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertIsNone(builder.knowledge)
+
+    def test_rebuild_passes_a_structured_knowledge_base_to_the_builder(self):
+        """``--kb-knowledge`` makes the governed path reachable from the CLI.
+
+        Before this flag there was no way to supply structured knowledge, so the
+        three-tier verification, conflict detection and holdout isolation in
+        domain/knowledge/governance.py could only ever run in tests.
+        """
+        config = self.config(sql_policy_path=str(ANIME_POLICY))
+        with tempfile.TemporaryDirectory() as directory:
+            knowledge_path = Path(directory) / "knowledge.json"
+            knowledge_path.write_text(
+                json.dumps(
+                    {
+                        "metrics": {
+                            "watch_hours::v1": {
+                                "metric_id": "watch_hours",
+                                "name": "Watch Hours",
+                                "expression": "SUM(fact_watch_session.watch_seconds) / 3600.0",
+                                "aggregation": "sum",
+                                "entity": "watch_session",
+                                "version": "v1",
+                            }
+                        },
+                        "glossary": {},
+                        "sources": {},
+                        "documents": {},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            exit_code, builder = self.run_rebuild(
+                config,
+                [
+                    "--rebuild-vector-kb",
+                    "--database",
+                    str(ANIME_DATABASE),
+                    "--kb-source",
+                    str(ANIME_SOURCE),
+                    "--kb-knowledge",
+                    str(knowledge_path),
+                ],
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIsNotNone(builder.knowledge)
+        self.assertIn("watch_hours::v1", builder.knowledge.metrics)
+
+    def test_kb_knowledge_requires_rebuild_and_an_existing_file(self):
+        config = self.config(sql_policy_path=str(ANIME_POLICY))
+        # Without --rebuild-vector-kb the flag must be rejected as a usage error.
+        with patch.object(cli, "load_config", lambda **_: config), patch.object(
+            sys, "argv", ["queryforge", "--kb-knowledge", "somewhere.json"]
+        ):
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = cli.main()
+        self.assertEqual(exit_code, 2)
+        self.assertIn("--kb-knowledge requires --rebuild-vector-kb", stderr.getvalue())
+
+        # A missing file is also a usage error, not a crash.
+        exit_code, _builder = self.run_rebuild(
+            config,
+            [
+                "--rebuild-vector-kb",
+                "--database",
+                str(ANIME_DATABASE),
+                "--kb-knowledge",
+                "/nonexistent/knowledge.json",
+            ],
+        )
+        self.assertEqual(exit_code, 2)
 
 
 if __name__ == "__main__":

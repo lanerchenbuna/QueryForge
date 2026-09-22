@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 import sqlglot
 from sqlglot import expressions as exp
@@ -41,18 +42,31 @@ class GenSqlNode(Node):
             context.sql_context = SQLContext.model_validate(payload)
             if payload.get("reasoning") is not None:
                 try:
-                    context.sql_context.reasoning_result = ReasoningResult.model_validate(
+                    normalized, coercions = self._normalize_reasoning(
                         payload["reasoning"]
+                    )
+                    context.sql_context.reasoning_result = ReasoningResult.model_validate(
+                        normalized
                     )
                     context.sql_context.reasoning_validation = self._validate_reasoning(
                         context.sql_context.sql,
                         context.sql_context.reasoning_result,
                     )
+                    if coercions:
+                        context.sql_context.reasoning_validation["coercions"] = coercions
                     context.reasoning_result = context.sql_context.reasoning_result
                     context.reasoning_validation = (
                         context.sql_context.reasoning_validation
                     )
                 except ValidationError as exc:
+                    # Recorded on the context, not only in a nested warning: the
+                    # payload is dropped entirely here, and a silent drop makes a
+                    # model that consistently emits an incompatible shape
+                    # indistinguishable from one that emits nothing.
+                    context.reasoning_discarded = "; ".join(
+                        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                        for error in exc.errors()[:5]
+                    )
                     context.reasoning_validation = {
                         "status": "warning",
                         "warnings": [f"Invalid reasoning payload: {exc}"],
@@ -76,6 +90,116 @@ class GenSqlNode(Node):
         except Exception as exc:
             return self.failure(f"Could not generate SQL: {exc}")
         return self.success("Generated SQLite query")
+
+    #: Words a model may use instead of a number for ``confidence``.
+    #:
+    #: Mapped strictly *below* the self-verification threshold (0.8) on purpose: a
+    #: word is not a measurement, so it must never by itself be enough to skip the
+    #: review pass. A model that genuinely means "high" can say 0.9.
+    _CONFIDENCE_WORDS: dict[str, float] = {
+        "high": 0.75,
+        "very high": 0.79,
+        "medium": 0.5,
+        "moderate": 0.5,
+        "low": 0.2,
+        "very low": 0.1,
+    }
+
+    @classmethod
+    def _normalize_reasoning(cls, payload: Any) -> tuple[dict[str, Any], list[str]]:
+        """Coerce the shapes models actually emit into the declared contract.
+
+        Observed from a real run, the same payload violated the schema in four
+        places at once — ``metrics`` as bare strings instead of objects,
+        ``sorting``/``limit`` as the *string* ``"None"`` instead of null, and
+        ``confidence`` as the word ``"high"`` instead of a number. Every run
+        therefore failed validation and the whole reasoning payload was discarded,
+        which made the audit summary dead weight in production.
+
+        Coercion is recorded and surfaced (``reasoning_validation.coercions``) so a
+        drifting prompt cannot hide behind tolerant parsing. Anything that cannot
+        be coerced is left alone and still fails validation, which keeps the
+        original behaviour: no reasoning rather than wrong reasoning.
+        """
+
+        if not isinstance(payload, dict):
+            return payload, []
+        normalized = dict(payload)
+        coercions: list[str] = []
+
+        nullish = {"none", "null", "n/a", "na", "nan"}
+
+        def _is_nullish(value: Any) -> bool:
+            return isinstance(value, str) and value.strip().lower() in nullish
+
+        for key in ("time_range", "limit", "strategy"):
+            if _is_nullish(normalized.get(key)):
+                normalized[key] = None
+                coercions.append(f"{key}: string-null -> null")
+
+        if _is_nullish(normalized.get("sorting")):
+            normalized["sorting"] = []
+            coercions.append("sorting: string-null -> []")
+
+        # Each of these is "a list of objects" in the contract, and the model
+        # reliably flattens some of them to bare strings. Confirmed on real runs:
+        # ``metrics`` and ``sorting`` both arrive as ["COUNT(x)", "col DESC"]. A
+        # single unconvertible entry discarded the entire payload, so the whole
+        # audit summary was dead weight in production.
+        list_shapes: tuple[tuple[str, str, Any], ...] = (
+            ("metrics", "expression", None),
+            ("sorting", "column", None),
+            ("dimensions", None, None),
+            ("tables", None, None),
+        )
+        for key, field, _unused in list_shapes:
+            value = normalized.get(key)
+            if not isinstance(value, list):
+                continue
+            if not any(isinstance(item, str) for item in value):
+                continue
+            if field is None:
+                continue
+            normalized[key] = [
+                {field: item} if isinstance(item, str) else item for item in value
+            ]
+            coercions.append(f"{key}: string entries -> {{{field}}}")
+
+        if isinstance(normalized.get("sorting"), list):
+            parsing = []
+            changed = False
+            for item in normalized["sorting"]:
+                if not isinstance(item, dict) or "direction" in item:
+                    parsing.append(item)
+                    continue
+                column = str(item.get("column") or "")
+                upper = column.upper()
+                for suffix, direction in ((" DESC", "DESC"), (" ASC", "ASC")):
+                    if upper.endswith(suffix):
+                        item = {"column": column[: -len(suffix)].strip(), "direction": direction}
+                        changed = True
+                        break
+                parsing.append(item)
+            if changed:
+                normalized["sorting"] = parsing
+                coercions.append("sorting: 'col DESC' -> {column, direction}")
+
+        confidence = normalized.get("confidence")
+        if isinstance(confidence, str):
+            text = confidence.strip().lower()
+            if text in cls._CONFIDENCE_WORDS:
+                normalized["confidence"] = cls._CONFIDENCE_WORDS[text]
+                coercions.append(
+                    f"confidence: {confidence!r} -> {normalized['confidence']}"
+                )
+            else:
+                try:
+                    normalized["confidence"] = float(text)
+                    coercions.append(f"confidence: {confidence!r} -> float")
+                except ValueError:
+                    pass
+
+        return normalized, coercions
 
     @staticmethod
     def _validate_reasoning(
@@ -264,7 +388,9 @@ Rules:
   except for a scalar aggregate query guaranteed to return one row.
 - Return only one JSON object with fields sql, explanation, tables_used, and optional
   reasoning. The reasoning must be a concise structured audit summary, not hidden
-  chain-of-thought:
+  chain-of-thought. If you include it, report "confidence" as a number between 0 and
+  1 and list any unresolved assumption in "assumptions" and any known weakness in
+  "risks":
   {{"sql": "SELECT ...", "explanation": "...", "tables_used": ["..."],
     "reasoning": {{"goal": "...", "grain": "...", "tables": ["..."], "joins": [],
       "metrics": [], "dimensions": [], "filters": [], "time_range": null,

@@ -405,6 +405,32 @@ class _AstIndex:
                 )
         return observed
 
+def _operator_symbol(comparison: Any) -> str:
+    """``gte``/``gt``/``lte``/``lt``/``eq`` for one comparison node."""
+
+    for name, symbol in (
+        ("GTE", "gte"),
+        ("GT", "gt"),
+        ("LTE", "lte"),
+        ("LT", "lt"),
+        ("EQ", "eq"),
+    ):
+        node_type = getattr(exp, name, None)
+        if node_type is not None and isinstance(comparison, node_type):
+            return symbol
+    return "unknown"
+
+
+def _digits(value: Any) -> str:
+    """Comparable digit form: ``2024-01-01`` and ``20240101`` both become digits.
+
+    The resolved range is an ISO date while a date-key column is an integer, so the
+    two must be compared in a shape-independent way.
+    """
+
+    return "".join(char for char in str(value) if char.isdigit())
+
+
 class SemanticSQLValidator:
     """Prove that generated SQL honours the governed semantic contract."""
 
@@ -794,7 +820,19 @@ class SemanticSQLValidator:
 
     def _default_filter_expectations(
         self, raw_filter: str, base_table: str
-    ) -> tuple[list[tuple[str, str]], tuple[str, Any] | None] | None:
+    ) -> tuple[list[tuple[str, str]] | None, tuple[str, Any] | None] | None:
+        """The columns and literal a declared default filter is expected to use.
+
+        Returns ``None`` when the filter is not a declarative predicate at all
+        (unparsable — the caller reports that as a violation), or a
+        ``(columns, literal)`` pair where ``columns`` may itself be ``None`` for a
+        filter that parses but references **no column** (for example
+        ``EXISTS(SELECT 1 FROM t.x)``). The annotation says so because the previous
+        one claimed ``list`` and the caller trusted it: passing ``None`` on to
+        ``set(columns)`` raised ``TypeError`` out of ``validate()``, which escapes
+        the node's try block and crashes the semantic gate instead of producing a
+        verdict.
+        """
         node = _parse_expression(raw_filter)
         if node is None:
             return None
@@ -852,7 +890,25 @@ class SemanticSQLValidator:
                     )
                     continue
                 columns, literal = expected
-                record: dict[str, Any] = {
+                if not columns:
+                    # Parses, but names no column: there is nothing to look for in
+                    # the SQL, so the filter cannot be proved either way. Reported
+                    # rather than crashing, and not silently treated as satisfied.
+                    self._add_violation(
+                        violations,
+                        RULE_DEFAULT_FILTER,
+                        f"metric {metric.name!r} default filter {raw_filter!r} "
+                        "references no column, so its presence in the SQL cannot "
+                        "be verified",
+                    )
+                    record: dict[str, Any] = {
+                        "metric": metric.name,
+                        "filter": raw_filter,
+                        "status": "unverifiable_no_column",
+                    }
+                    evidence["default_filters"].append(record)
+                    continue
+                record = {
                     "metric": metric.name,
                     "filter": raw_filter,
                     "status": "missing",
@@ -1021,6 +1077,44 @@ class SemanticSQLValidator:
             f"effective predicate references {rendered}",
         )
 
+    @staticmethod
+    def _time_boundaries(
+        index: "_AstIndex", wanted: set[tuple[str, str]]
+    ) -> list[tuple[str, Any]]:
+        """Literal comparisons applied to the governed time column.
+
+        Returns ``(operator, literal)`` for every predicate that compares the time
+        field to a value, so the boundaries can be checked against the resolved
+        date range instead of only checking that *some* predicate mentions the
+        column.
+        """
+
+        boundaries: list[tuple[str, Any]] = []
+        for scope, _kind, predicate in index.predicates:
+            for node in predicate.find_all(exp.Column):
+                if not (index.resolve_column(scope, node) & wanted):
+                    continue
+                # BETWEEN is its own node type, not a pair of comparisons, and the
+                # governed compiler emits it for a resolved date range. Missing it
+                # made every compiler-produced time filter look unbounded.
+                between = node.find_ancestor(exp.Between)
+                if between is not None:
+                    low, high = between.args.get("low"), between.args.get("high")
+                    for operator, bound in (("gte", low), ("lte", high)):
+                        if isinstance(bound, exp.Literal):
+                            boundaries.append((operator, _literal_value(bound)))
+                    continue
+                comparison = node.find_ancestor(
+                    exp.EQ, exp.GTE, exp.GT, exp.LTE, exp.LT
+                )
+                if comparison is None:
+                    continue
+                literal = comparison.expression
+                if not isinstance(literal, exp.Literal):
+                    continue
+                boundaries.append((_operator_symbol(comparison), _literal_value(literal)))
+        return boundaries
+
     def _check_time_filter(
         self,
         index: _AstIndex,
@@ -1061,10 +1155,27 @@ class SemanticSQLValidator:
                         break
                 if present:
                     break
+            boundaries = (
+                self._time_boundaries(index, wanted) if present else []
+            )
+            verdict = "presence_checked"
+            if present and not boundaries:
+                # The column is mentioned but never compared to anything, so the
+                # predicate cannot be bounding the window.
+                verdict = "presence_only"
+            elif present:
+                verdict = "boundary_checked"
             evidence["time_filter"] = {
                 "metric": metric.name,
                 "time_field": time_field,
-                "status": "presence_checked" if present else "missing",
+                "status": verdict,
+                "resolved_ranges": [
+                    {"start": start, "end": end} for start, end in ranges
+                ],
+                "observed_boundaries": [
+                    {"operator": operator, "value": value}
+                    for operator, value in boundaries
+                ],
             }
             if not present:
                 self._add_violation(
@@ -1073,6 +1184,61 @@ class SemanticSQLValidator:
                     f"metric {metric.name!r} time_field {time_field} is not filtered "
                     "although the request resolves a date range",
                 )
+            elif not boundaries:
+                # Asymmetric with default filters, which do compare literals. A
+                # predicate that mentions the column without comparing it does not
+                # constrain the window, so the check would otherwise pass on a
+                # statement that ignores the requested range.
+                self._add_violation(
+                    violations,
+                    RULE_TIME_FILTER,
+                    f"metric {metric.name!r} time_field {time_field} is referenced but "
+                    "compared to no value, so the requested date range is not applied",
+                )
+            elif not self._boundaries_cover_ranges(boundaries, ranges):
+                self._add_violation(
+                    violations,
+                    RULE_TIME_FILTER,
+                    f"metric {metric.name!r} time_field {time_field} is compared to "
+                    f"{[value for _operator, value in boundaries]} which does not cover "
+                    f"the requested range(s) "
+                    f"{[f'{start}..{end}' for start, end in ranges]}",
+                )
+
+    @staticmethod
+    def _boundaries_cover_ranges(
+        boundaries: list[tuple[str, Any]],
+        ranges: list[tuple[str, str]],
+    ) -> bool:
+        """Whether the observed comparisons can express the requested window.
+
+        Only *shape* is checked, not calendar arithmetic: at least one lower bound
+        and one upper bound must be present, in a form comparable to the range
+        strings. A comparison that pins a different value is not "wrong" here — the
+        resolved range is derived from the question, so a mismatch means the SQL
+        filtered something else. Values are normalised to digits so a date-key form
+        (``20240101``) and an ISO form (``2024-01-01``) both compare.
+        """
+
+        lower = {"gte", "gt", "eq"}
+        upper = {"lte", "lt", "eq"}
+        observed = {
+            (_digits(value), operator) for operator, value in boundaries
+        }
+        for start, end in ranges:
+            start_digits = _digits(start)
+            end_digits = _digits(end)
+            has_lower = any(
+                operator in lower and value >= start_digits
+                for value, operator in observed
+            )
+            has_upper = any(
+                operator in upper and value <= end_digits
+                for value, operator in observed
+            )
+            if not (has_lower and has_upper):
+                return False
+        return True
 
     def _check_join_keys(
         self,

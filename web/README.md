@@ -33,7 +33,7 @@ If the API uses another address, copy `.env.example` to `.env.local` and change
 - **Data Domains** — create, select, and manage isolated business contexts.
 - **Overview** — active-domain readiness, governed metrics, contract health, and
   recent activity.
-- **Data Sources** — domain-scoped SQLite, CSV, and Parquet onboarding.
+- **Data Sources** — domain-scoped CSV and Parquet onboarding; QueryForge builds the governed SQLite database from the uploaded source data.
 - **Semantic Studio** — a required contract builder for identity, grain,
   dimensions, measures, metrics, relationships, Join Paths, policy, and quality.
 - **Ask & Analyze** — natural language to governed SQL with progress, results,

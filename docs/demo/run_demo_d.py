@@ -324,7 +324,18 @@ def _resume_after_crash(root: Path) -> dict:
         "terminal": resumed.get("terminal_outcome"),
         "reused": sorted(resumed.get("reused_steps") or []),
         "recomputed": sorted(resumed.get("recomputed_steps") or []),
-        "tool_calls": int((resumed.get("budgets") or {}).get("usage", {}).get("max_tool_calls") or 0),
+        # Net of what this attempt inherited: budget usage is cumulative across
+        # attempts of one run (E-04), so the raw figure counts the original
+        # attempt's calls too. The demo's claim is about re-querying on resume,
+        # which is the delta.
+        "tool_calls": max(
+            0,
+            int((resumed.get("budgets") or {}).get("usage", {}).get("max_tool_calls") or 0)
+            - int((resumed.get("inherited_usage") or {}).get("max_tool_calls") or 0),
+        ),
+        "inherited_tool_calls": int(
+            (resumed.get("inherited_usage") or {}).get("max_tool_calls") or 0
+        ),
         "first_terminal": first.get("terminal_outcome"),
     }
 

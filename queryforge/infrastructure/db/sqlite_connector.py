@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from .adapters import AdapterCapabilities
 
 from queryforge.core.schemas.models import (
     ExecutionResult,
@@ -12,6 +11,7 @@ from queryforge.core.schemas.models import (
     TableColumn,
     TableSchema,
 )
+from queryforge.infrastructure.db.adapter import capabilities_for_dialect
 
 
 class SQLiteConnectorError(RuntimeError):
@@ -22,7 +22,13 @@ class SQLiteConnector:
     """Open one existing SQLite database with read-only enforcement."""
 
     dialect = "sqlite"
-    capabilities = AdapterCapabilities("sqlite")
+    #: Taken from the single frozen declaration point, not built from dataclass
+    #: defaults: ``AdapterCapabilities("sqlite")`` silently disagreed with
+    #: ``SQLITE_CAPABILITIES`` on ``explain_prefix`` ("EXPLAIN" instead of
+    #: "EXPLAIN QUERY PLAN"), ``date_functions`` and ``integer_division``, so a
+    #: reader of this attribute got a different capability set than the adapter
+    #: actually enforced (E-23).
+    capabilities = capabilities_for_dialect("sqlite")
 
     def __init__(self, database_path: str) -> None:
         self.database_path = Path(database_path).expanduser().resolve()

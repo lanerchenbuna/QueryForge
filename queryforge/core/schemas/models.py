@@ -158,6 +158,14 @@ class ExecutionResult(BaseModel):
     columns: list[str] = Field(default_factory=list)
     rows: list[list[Any]] = Field(default_factory=list)
     row_count: int = 0
+    #: True when the adapter's row bound cut the result short. Without this the
+    #: bound was invisible: ``_enforce_row_bound`` overwrote ``row_count`` with the
+    #: truncated length, so a caller could not tell a complete result from a
+    #: capped one, and the original size was not recorded anywhere.
+    truncated: bool = False
+    #: Rows the engine actually produced, before the bound was applied. Equal to
+    #: ``row_count`` when ``truncated`` is False.
+    fetched_row_count: int = 0
 
 
 class SqlPolicyDecision(BaseModel):
@@ -236,6 +244,49 @@ class NodeResult(BaseModel):
     duration_ms: float | None = None
 
 
+class RunContext(BaseModel):
+    """Run identity and the versions a run executed against.
+
+    Both execution paths (the conversational workflow and the planner) populate
+    this, so a run's identity and the semantic/data/policy versions it depended on
+    travel with the payload instead of being reconstructed from whichever layer
+    happens to be asking. Artifact provenance and recovery fingerprints need the
+    same four versions, and before this each caller assembled them separately.
+    """
+
+    run_id: str
+    task_id: str | None = None
+    session_id: str | None = None
+    domain_id: str | None = None
+    #: Versions the answer is only valid for. ``None`` means "not declared", which
+    #: is different from "unchanged" and is reported as such.
+    data_version: str | None = None
+    semantic_version: str | None = None
+    policy_version: str | None = None
+    entrypoint: str | None = None
+
+    @classmethod
+    def from_context(cls, context: "Context", **overrides: Any) -> "RunContext":
+        """Build from anything already known, leaving unknown fields as None."""
+
+        task_context = context.task_context if isinstance(context.task_context, dict) else {}
+        scope = task_context.get("retrieval_scope")
+        scope = scope if isinstance(scope, dict) else {}
+        semantic = context.semantic_model
+        values: dict[str, Any] = {
+            "run_id": context.run_id,
+            "task_id": task_context.get("task_id"),
+            "session_id": task_context.get("session_id"),
+            "domain_id": scope.get("domain_id"),
+            "data_version": scope.get("data_version"),
+            "semantic_version": getattr(getattr(semantic, "model", None), "version", None),
+            "policy_version": (context.sql_policy or {}).get("version"),
+            "entrypoint": task_context.get("entrypoint"),
+        }
+        values.update({key: value for key, value in overrides.items() if value is not None})
+        return cls(**values)
+
+
 class Context(BaseModel):
     task: SqlTask
     run_id: str = Field(default_factory=lambda: f"qf_{uuid4().hex}")
@@ -251,6 +302,12 @@ class Context(BaseModel):
     execution_plan: ExecutionPlan | None = None
     plan_approved: bool | None = None
     reflection_result: ReflectionResult | None = None
+    #: Why a model-supplied ``reasoning`` payload was rejected, when it was. The
+    #: rejection used to be silent: the payload was validated, failed, and dropped
+    #: with nothing but a warning buried in ``reasoning_validation``, so a model
+    #: that always emitted an incompatible shape looked identical to one that
+    #: emitted nothing at all.
+    reasoning_discarded: str | None = None
     fix_attempts: list[FixAttempt] = Field(default_factory=list)
     retry_count: int = 0
     execution_errors: list[str] = Field(default_factory=list)
@@ -297,9 +354,25 @@ class Context(BaseModel):
     ] = "disabled"
     tool_loop_exit_reason: str | None = None
     candidate_selection: dict[str, Any] | None = None
+    #: Which SQL-producing strategy this attempt used: ``tool_loop`` when the
+    #: exploration loop produced the answer, ``parallel_candidates`` when several
+    #: candidates were generated and selected, ``single_generation`` otherwise.
+    #: Recorded because "complex" enables both the tool loop and extra candidates,
+    #: and the tool loop wins — so a run cannot be audited for candidate use without
+    #: this field.
+    candidate_strategy: str = "unknown"
     reasoning_result: ReasoningResult | None = None
     reasoning_validation: dict[str, Any] | None = None
     node_results: list[NodeResult] = Field(default_factory=list)
     # Shared structured context for step 04/05/07/08 workflows (schema
     # retrieval evidence, typed error categories, analysis patches, ...).
     task_context: dict[str, Any] = Field(default_factory=dict)
+    #: Unified run identity and the versions this run depends on.
+    run_context: RunContext | None = None
+    #: Shared budget bounding every model call in this run, or None when the path
+    #: does not charge model calls. Excluded from serialization: it is a live
+    #: object graph, and its snapshot is reported instead.
+    model_budget: Any | None = Field(default=None, exclude=True)
+    #: Populated when a model call was refused by that budget, so a stopped run can
+    #: say it stopped for budget rather than merely that it stopped.
+    budget_refusal: dict[str, Any] = Field(default_factory=dict)

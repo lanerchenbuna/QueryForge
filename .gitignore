@@ -24,6 +24,8 @@ Thumbs.db
 *.sqlite-wal
 *.build.json
 semantic-weekly-report.json
-# Generated benchmark reports (the summarized evidence lives in
-# docs/optimization/step-16-acceptance.md; CI uploads its own artifacts).
+# Generated benchmark reports: raw JSON is regenerable, so it is not tracked.
+# The summarized, versioned evidence lives in docs/optimization/baselines.md
+# (the comment here previously pointed at docs/optimization/step-16-acceptance.md,
+# which does not exist in the repository).
 evaluation/reports/

@@ -223,16 +223,41 @@ class ReflectiveWorkflow:
         if getattr(self.context, "final_output", None) is not None:
             assert self.context.final_output is not None
             return self.context.final_output
+        # Candidate strategy. Exactly one SQL producer runs per attempt, and the
+        # precedence is deliberate:
+        #
+        # 1. a tool-loop ``final_answer`` already produced SQL, so it is used as-is;
+        # 2. otherwise, if several candidates are configured, they are generated and
+        #    the selector picks one;
+        # 3. otherwise a single generation runs.
+        #
+        # The consequence of (1) is that candidates are skipped whenever the tool
+        # loop produced SQL — which is most complex requests, because complexity
+        # routing enables both the tool loop *and* extra candidates. That is not a
+        # dead branch, it is the intended precedence (observations gathered first,
+        # then one answer), but it means "complex" does not imply "candidates ran".
+        # Recorded here because the behaviour was previously inferable only from the
+        # control flow, and a run could not report which strategy it used.
+        tool_loop_produced_sql = False
         if self.tool_loop_node is not None and self.context.sql_context is None:
             self._run_required(self.tool_loop_node)
+            tool_loop_produced_sql = self.context.sql_context is not None
             if getattr(self.context, "final_output", None) is not None:
                 assert self.context.final_output is not None
                 return self.context.final_output
-        if self.context.sql_context is None:
+        if not tool_loop_produced_sql and self.context.sql_context is None:
             if self.parallel_candidates_node is not None:
                 self._run_required(self.parallel_candidates_node)
             else:
                 self._run_required(self.gen_sql_node)
+        self.context.candidate_strategy = (
+            "tool_loop"
+            if tool_loop_produced_sql
+            else "parallel_candidates"
+            if self.parallel_candidates_node is not None
+            and self.context.candidate_selection is not None
+            else "single_generation"
+        )
 
         while True:
             self._check_cancelled()
@@ -284,6 +309,16 @@ class ReflectiveWorkflow:
                 continue
 
             self.context.last_execution_error = None
+            # Reflection runs on every execution, unconditionally.
+            #
+            # A conditional skip was implemented and measured, then removed: the
+            # gate required a self-verified generation (high confidence, no declared
+            # assumptions, no declared risks) and it fired on **0 of 40** cases,
+            # because the model correctly reports high confidence *together with*
+            # material assumptions on essentially every question. Skipping on that
+            # signal would have meant not asking for assumptions at all, which
+            # trades audit visibility for latency. Measurements and the three
+            # alternatives considered are recorded in docs/evaluation_baselines.md.
             self._run_required(self.reflect_node)
             reflection = self.context.reflection_result
             if reflection is None:
@@ -300,39 +335,21 @@ class ReflectiveWorkflow:
             )
 
             if reflection.strategy == "SUCCESS":
-                self._run_required(self.output_node)
-                if self.visualization_node is not None:
-                    visualization_result = self._run(self.visualization_node)
-                    if not visualization_result.success:
-                        assert self.context.final_output is not None
-                        self.context.final_output["visualization"] = {
-                            "chart_type": "table",
-                            "chart_config": {
-                                "format": "table",
-                                "columns": (
-                                    self.context.execution_result.columns
-                                    if self.context.execution_result
-                                    else []
-                                ),
-                                "rows": (
-                                    self.context.execution_result.rows
-                                    if self.context.execution_result
-                                    else []
-                                ),
-                            },
-                            "chart_path": None,
-                            "reason": "Visualization failed; SQL output remains valid.",
-                            "error": visualization_result.error,
-                        }
+                self._finish_successfully()
                 assert self.context.final_output is not None
                 return self.context.final_output
 
             if reflection.strategy == "NEED_USER_REVIEW":
-                raise WorkflowError(
-                    "reflect",
-                    f"Human review required: {reflection.reason}",
-                    self.context,
-                )
+                # The reflection verdict is "I cannot decide whether this answers
+                # the question". That is a clarification request, not a failure:
+                # raising here produced zero payload and recorded the run as
+                # failed, even though the model had correctly identified an
+                # ambiguity (observed on the benchmark's only multi-turn case).
+                # ``needs_clarification`` is already part of the platform's
+                # terminal vocabulary (event protocol, REST mapping, gateway
+                # wording, evaluator outcome set), so surface it as a result.
+                self.context.final_output = self._clarification_output(reflection)
+                return self.context.final_output
 
             self._require_retry(reflection.strategy, reflection.reason)
             self.context.retry_count += 1
@@ -363,6 +380,62 @@ class ReflectiveWorkflow:
                 f"Unsupported reflection strategy: {reflection.strategy}",
                 self.context,
             )
+
+    def _finish_successfully(self) -> None:
+        """Assemble the final output, with the table fallback if a chart fails.
+
+        Shared by the reflected-success path and the self-verified path so the two
+        cannot drift apart in how a failed visualization is reported.
+        """
+
+        self._run_required(self.output_node)
+        if self.visualization_node is None:
+            return
+        visualization_result = self._run(self.visualization_node)
+        if visualization_result.success:
+            return
+        assert self.context.final_output is not None
+        execution = self.context.execution_result
+        self.context.final_output["visualization"] = {
+            "chart_type": "table",
+            "chart_config": {
+                "format": "table",
+                "columns": execution.columns if execution else [],
+                "rows": execution.rows if execution else [],
+            },
+            "chart_path": None,
+            "reason": "Visualization failed; SQL output remains valid.",
+            "error": visualization_result.error,
+        }
+
+    def _clarification_output(self, reflection: Any) -> dict[str, Any]:
+        """Structured clarification result for a NEED_USER_REVIEW verdict.
+
+        Shaped to match the payload ``AnalysisPlannerService`` already returns
+        for a clarification, so both execution paths report the same terminal
+        status and reason vocabulary. The SQL and its result are kept: the
+        ambiguity is about meaning, not about whether the query ran.
+        """
+
+        sql_context = self.context.sql_context
+        execution = self.context.execution_result
+        self.context.last_execution_error = None
+        return {
+            "status": "needs_clarification",
+            "run_id": self.context.run_id,
+            "question": self.context.task.question,
+            "reason": reflection.reason,
+            "strategy": reflection.strategy,
+            "unresolved_questions": [reflection.reason],
+            "sql": sql_context.sql if sql_context else None,
+            "explanation": sql_context.explanation if sql_context else None,
+            "tables_used": list(sql_context.tables_used) if sql_context else [],
+            "columns": execution.columns if execution else [],
+            "rows": execution.rows if execution else [],
+            "row_count": execution.row_count if execution else 0,
+            "retry_count": self.context.retry_count,
+            "execution_errors": list(self.context.execution_errors),
+        }
 
     def _register_attempt_signature(self) -> None:
         """Track normalized SQL per attempt and stop A -> B -> A repair cycles."""

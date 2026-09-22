@@ -2,7 +2,15 @@ import { requireStudioUser, studioAuthMode } from "@/app/studio-auth";
 import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = new Set(["sqlite", "db", "csv", "parquet"]);
+// Must match PublishService.ALLOWED_EXTENSIONS in
+// queryforge/application/publish_service.py. This list previously also accepted
+// "sqlite" and "db", which the Python side rejects outright, so uploading a
+// database file always ended in pythonPublish.status = "failed" and an HTTP 422:
+// a dead end advertised as a supported path. Publishing builds a governed
+// database *from* source data, so a prebuilt database is not an accepted input and
+// the UI says so up front instead of failing at the end of the wizard.
+const ALLOWED_EXTENSIONS = new Set(["csv", "parquet"]);
+const REJECTED_DATABASE_EXTENSIONS = new Set(["sqlite", "db", "sqlite3"]);
 const CSV_HEADER_READ_LIMIT = 256 * 1024;
 
 type UploadedSemanticContract = {
@@ -284,9 +292,25 @@ export async function POST(request: Request) {
     }
 
     for (const file of files) {
-      if (!ALLOWED_EXTENSIONS.has(extension(file.name))) {
+      const fileExtension = extension(file.name);
+      if (REJECTED_DATABASE_EXTENSIONS.has(fileExtension)) {
         return Response.json(
-          { detail: `Unsupported file type: ${file.name}` },
+          {
+            detail:
+              `${file.name}: database files cannot be published directly. Upload ` +
+              `the source data (CSV or Parquet) and QueryForge builds the governed ` +
+              `database from it.`,
+          },
+          { status: 400 },
+        );
+      }
+      if (!ALLOWED_EXTENSIONS.has(fileExtension)) {
+        return Response.json(
+          {
+            detail:
+              `Unsupported file type: ${file.name}. Allowed: ` +
+              `${[...ALLOWED_EXTENSIONS].sort().join(", ")}.`,
+          },
           { status: 400 },
         );
       }

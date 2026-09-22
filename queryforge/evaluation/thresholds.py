@@ -24,14 +24,15 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from queryforge.core.paths import resolve_path
+
 #: Tiers of the benchmark; they are reported separately and never mixed.
 TIER_NAMES: tuple[str, ...] = ("tier1_offline", "tier2_integration", "tier3_model_e2e")
 
-#: The checked-in thresholds document (repo relative; this file lives in
-#: ``queryforge/evaluation/``, so two parents up is the project root).
-DEFAULT_THRESHOLDS_PATH = (
-    Path(__file__).resolve().parents[2] / "evaluation" / "thresholds.json"
-)
+#: The checked-in thresholds document: workspace relative, resolved through
+#: ``core.paths`` rather than derived from ``__file__`` so an installed package
+#: does not look for it inside ``site-packages`` (E-22).
+DEFAULT_THRESHOLDS_PATH = resolve_path("evaluation/thresholds.json")
 
 #: Rule keys inside a tier: ``min_<metric>`` / ``max_<metric>``.
 _RULE_PREFIXES: tuple[str, ...] = ("min_", "max_")

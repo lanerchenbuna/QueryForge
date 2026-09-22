@@ -168,17 +168,42 @@ class RetryWorkflowTest(unittest.TestCase):
             SQLHistoryStore(self.config.history_db_path).list_entries(), []
         )
 
-    def test_need_user_review_stops_with_clear_reason(self) -> None:
+    def test_need_user_review_returns_a_clarification_instead_of_discarding_the_run(
+        self,
+    ) -> None:
+        """A NEED_USER_REVIEW verdict is a question, not a crash.
+
+        This test previously asserted ``assertRaisesRegex(WorkflowError, "Human
+        review required")``. That behaviour was the defect (D-2): the model had
+        correctly identified an ambiguity, and the workflow answered by raising,
+        which produced **zero payload** and recorded the run as failed. The
+        verdict is now surfaced as a structured ``needs_clarification`` result,
+        which is the vocabulary the REST mapping, the event protocol, the gateway
+        wording and the evaluator already understand.
+        """
         llm = RetryLLM("review")
         runner = WorkflowRunner(
             self.config,
             llm_factory=lambda _: llm,
             selected_skills=[],
         )
-        with self.assertRaisesRegex(WorkflowError, "Human review required"):
-            runner.run(
-                SqlTask(question="List item names", database_path=str(self.database))
-            )
+        output = runner.run(
+            SqlTask(question="List item names", database_path=str(self.database))
+        )
+        self.assertEqual(output["status"], "needs_clarification")
+        self.assertEqual(
+            output["reason"], "The requested business meaning is ambiguous."
+        )
+        self.assertEqual(output["strategy"], "NEED_USER_REVIEW")
+        self.assertEqual(
+            output["unresolved_questions"],
+            ["The requested business meaning is ambiguous."],
+        )
+        # The run asked a question about meaning; the query itself still ran, so
+        # its SQL and rows must survive rather than being thrown away.
+        self.assertTrue(output["sql"])
+        self.assertIn("row_count", output)
+        self.assertEqual(output["execution_errors"], [])
 
 
 if __name__ == "__main__":

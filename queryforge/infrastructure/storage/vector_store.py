@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+from queryforge.core.paths import workspace_root
+
+
+PROJECT_ROOT = workspace_root()
 DEFAULT_VECTOR_KB_PATH = PROJECT_ROOT / ".queryforge/lancedb"
 SQL_HISTORY_VECTORS = "sql_history_vectors"
 SCHEMA_DOC_VECTORS = "schema_doc_vectors"

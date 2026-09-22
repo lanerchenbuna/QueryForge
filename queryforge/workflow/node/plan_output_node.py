@@ -20,15 +20,16 @@ class PlanOutputNode(Node):
                 context.sql_context.sql
             )
         except Exception as exc:
-            decision = self.database_tool.last_policy_decision
+            # This node preflights the statement itself instead of calling the
+            # tool, so the only decision describing *this* statement is the one the
+            # engine attached to the exception. Reading — or worse, assigning —
+            # ``database_tool.last_policy_decision`` here would attribute another
+            # caller's decision to this plan, and the tool's audit record would
+            # claim a call that never happened (E-23).
             policy_violation = getattr(exc, "decision", None)
             if policy_violation is not None:
-                decision = policy_violation
-                self.database_tool.last_policy_decision = policy_violation
-            if decision is not None:
-                context.sql_policy_decisions.append(decision)
+                context.sql_policy_decisions.append(policy_violation)
             return self.failure(f"SQL policy preflight failed: {exc}")
-        self.database_tool.last_policy_decision = decision
         context.sql_policy_decisions.append(decision)
         context.final_output = {
             "status": "planned",

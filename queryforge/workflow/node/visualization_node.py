@@ -11,11 +11,12 @@ from numbers import Number
 from pathlib import Path
 from typing import Any, Literal
 
+from queryforge.core.paths import workspace_root
 from queryforge.workflow.node.base import Node
 from queryforge.core.schemas.models import Context, NodeResult, VisualizationResult
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = workspace_root()
 DEFAULT_CHART_OUTPUT_DIR = PROJECT_ROOT / ".queryforge/charts"
 VEGA_LITE_SCHEMA = "https://vega.github.io/schema/vega-lite/v5.json"
 LOGGER = logging.getLogger("queryforge.visualization")

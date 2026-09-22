@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
+
+
+LOGGER = logging.getLogger("queryforge.execution_journal")
 
 
 JOURNAL_SCHEMA_VERSION = "1.0"
@@ -132,6 +137,9 @@ class RunJournal(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     budget: dict[str, Any] = Field(default_factory=dict)
+    #: Data / semantic / policy versions this run was recorded against. Persisted so
+    #: a resume recomputes steps whose inputs now resolve differently.
+    versions: dict[str, str] = Field(default_factory=dict)
     steps: dict[str, StepRecord] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
 
@@ -156,6 +164,10 @@ class ExecutionJournal:
         self._lock = threading.RLock()
         self._run_id = run_id or self.run_dir.name
         self._journal = self._load_or_create()
+        #: The version set this journal binds to. Set by ``register_plan`` and read
+        #: by every later fingerprint computation so a resume cannot recompute a
+        #: step against a different version than it was originally recorded under.
+        self.versions: dict[str, Any] = dict(self._journal.versions)
 
     # ------------------------------------------------------------------ paths
 
@@ -204,17 +216,53 @@ class ExecutionJournal:
 
     # ------------------------------------------------------------------ plan
 
-    @staticmethod
-    def fingerprint_step(action: str, inputs: dict[str, Any], *, plan_version: int) -> str:
-        payload = json.dumps(
-            {"action": action, "inputs": inputs, "plan_version": plan_version},
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    #: Version dimensions a step fingerprint must bind, beyond the action itself.
+    #:
+    #: A fingerprint that covers only ``action``/``inputs``/``plan_version`` says
+    #: "the same request" while ignoring the data and definitions it ran against, so
+    #: a resume after the database or the semantic model changed would reuse a
+    #: result computed over different inputs. ``DomainContext`` and ``RunContext``
+    #: already carry all three versions; this is where they start mattering.
+    FINGERPRINT_VERSIONS: tuple[str, ...] = (
+        "data_version",
+        "semantic_version",
+        "policy_version",
+    )
 
-    def register_plan(self, plan: Any) -> list[str]:
+    @classmethod
+    def fingerprint_step(
+        cls,
+        action: str,
+        inputs: dict[str, Any],
+        *,
+        plan_version: int,
+        versions: dict[str, Any] | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "action": action,
+            "inputs": inputs,
+            "plan_version": plan_version,
+        }
+        if versions:
+            # Only the declared dimensions, and only when actually supplied: an
+            # undeclared version is "unknown", which is different from "unchanged",
+            # so it must not silently equal a known value.
+            declared = {
+                key: str(versions[key])
+                for key in cls.FINGERPRINT_VERSIONS
+                if versions.get(key) not in (None, "")
+            }
+            if declared:
+                payload["versions"] = declared
+        return hashlib.sha256(
+            json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, default=str
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def register_plan(
+        self, plan: Any, *, versions: dict[str, Any] | None = None
+    ) -> list[str]:
         """Register (or refresh) every step of ``plan``; returns changed step ids.
 
         A step whose fingerprint changed (new inputs or a new plan version) is
@@ -228,7 +276,10 @@ class ExecutionJournal:
             self._journal.plan_version = max(self._journal.plan_version, version)
             for step in getattr(plan, "steps", []):
                 fingerprint = self.fingerprint_step(
-                    step.action, dict(step.inputs or {}), plan_version=version
+                    step.action,
+                    dict(step.inputs or {}),
+                    plan_version=version,
+                    versions=versions,
                 )
                 existing = self._journal.steps.get(step.id)
                 if existing is None:
@@ -253,6 +304,13 @@ class ExecutionJournal:
                     existing.outcome_certain = True
                     existing.plan_version = version
                     changed.append(step.id)
+            if versions:
+                self._journal.versions = {
+                    key: str(versions[key])
+                    for key in self.FINGERPRINT_VERSIONS
+                    if versions.get(key) not in (None, "")
+                }
+                self.versions = dict(self._journal.versions)
             self.save()
         return changed
 
@@ -352,28 +410,107 @@ class ExecutionJournal:
                 record.outcome_certain = False
             self.save()
 
+    # ------------------------------------------------------- cross-instance lock
+    #
+    # The in-process ``threading.RLock`` only serialises access within one
+    # ``ExecutionJournal`` object. Two instances built on the same run directory —
+    # a second worker, or a resumed process — each keep their own in-memory
+    # snapshot, so both could pass the "is this lease still live?" check against a
+    # stale copy and both write their own lease: measured, worker A and worker B
+    # both acquired the same step. ``os.replace`` makes each write atomic but
+    # provides no mutual exclusion between the writers.
+    #
+    # A file lock does. Same approach as the data-asset builder lock: an advisory
+    # ``fcntl.flock`` on a sidecar file, degrading to a logged no-op where
+    # ``fcntl`` is unavailable.
+
+    @property
+    def _lock_path(self) -> Path:
+        return self.path.with_name(self.path.name + ".lock")
+
+    @contextmanager
+    def _cross_instance_lock(self) -> Any:
+        """Serialise a read-modify-write against other instances of this run."""
+
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - platform dependent
+            LOGGER.warning(
+                "fcntl unavailable; lease exclusion between journal instances is "
+                "not enforced on this platform (%s)",
+                self.path,
+            )
+            yield
+            return
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        handle = self._lock_path.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
+    def reload(self) -> None:
+        """Refresh the in-memory snapshot from disk.
+
+        Called while holding the cross-instance lock, so a read-modify-write cycle
+        decides on the state another instance actually committed rather than on
+        the copy this instance loaded at construction time.
+        """
+
+        with self._lock:
+            self._journal = self._load_or_create()
+
     # ------------------------------------------------------------------ leases
 
     def acquire_lease(
         self, step_id: str, *, owner: str, ttl_seconds: float = 60.0
     ) -> StepLease | None:
-        """Claim a step for one worker; returns None when another lease is live."""
+        """Claim a step for one worker; returns None when another lease is live.
+
+        The claim is decided under a cross-instance file lock and on a freshly
+        reloaded snapshot, so a second worker cannot win the same step by checking
+        its own stale copy. Measured before this: two instances in the same
+        process both acquired the same step.
+        """
+
         now = self.clock()
-        with self._lock:
-            record = self._journal.steps.get(step_id)
-            if record is None:
-                return None
-            lease = record.lease
-            if lease is not None and lease.expires_at > now and lease.owner != owner:
-                return None
-            token = hashlib.sha256(
-                f"{self._journal.run_id}:{step_id}:{owner}:{now}".encode("utf-8")
-            ).hexdigest()[:16]
-            record.lease = StepLease(
-                owner=owner, token=token, acquired_at=now, expires_at=now + ttl_seconds
-            )
-            self.save()
-            return record.lease
+        with self._cross_instance_lock():
+            # Decide on what is actually on disk, not on what this instance loaded
+            # when it was constructed.
+            self.reload()
+            with self._lock:
+                record = self._journal.steps.get(step_id)
+                if record is None:
+                    return None
+                lease = record.lease
+                if (
+                    lease is not None
+                    and lease.expires_at > now
+                    and lease.owner != owner
+                ):
+                    LOGGER.info(
+                        "lease_denied run_id=%s step=%s held_by=%s expires_in=%.1fs",
+                        self._journal.run_id,
+                        step_id,
+                        lease.owner,
+                        lease.expires_at - now,
+                    )
+                    return None
+                token = hashlib.sha256(
+                    f"{self._journal.run_id}:{step_id}:{owner}:{now}".encode("utf-8")
+                ).hexdigest()[:16]
+                record.lease = StepLease(
+                    owner=owner,
+                    token=token,
+                    acquired_at=now,
+                    expires_at=now + ttl_seconds,
+                )
+                self.save()
+                return record.lease
 
     def release_lease(self, step_id: str, *, owner: str) -> None:
         with self._lock:

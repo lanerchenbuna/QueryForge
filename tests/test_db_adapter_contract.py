@@ -46,6 +46,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from queryforge.infrastructure.db import (
+    CAPABILITY_REGISTRY,
     DATE_FUNCTION_VOCABULARY,
     AdapterCancelledError,
     AdapterCapabilities,
@@ -59,6 +60,7 @@ from queryforge.infrastructure.db import (
     DuckDBConnector,
     SQLiteConnector,
     adapt_connector,
+    capabilities_for_dialect,
     normalize_type,
     normalize_value,
 )
@@ -473,6 +475,23 @@ class AdapterConformanceMixin(ResultComparisonMixin):
 
     # ---- capabilities ----------------------------------------------------
 
+    def test_connector_declaration_is_the_frozen_matrix_entry(self):
+        """A connector must not re-derive its own capability declaration.
+
+        ``SQLiteConnector`` used to build ``AdapterCapabilities("sqlite")`` from
+        dataclass defaults, which silently disagreed with ``SQLITE_CAPABILITIES``
+        on ``explain_prefix`` (``"EXPLAIN"`` vs ``"EXPLAIN QUERY PLAN"``),
+        ``date_functions`` and ``integer_division``. Anyone reading the connector
+        got a different capability set from the one the adapter enforced (E-23).
+        """
+        self.assertIs(self.adapter.capabilities, CAPABILITY_REGISTRY[self.DIALECT])
+        self.assertIs(
+            self.CONNECTOR_CLASS.capabilities, CAPABILITY_REGISTRY[self.DIALECT]
+        )
+        self.assertIs(
+            self.CONNECTOR_CLASS.capabilities, capabilities_for_dialect(self.DIALECT)
+        )
+
     def test_declared_capabilities_are_truthful(self):
         capabilities = self.adapter.capabilities
         probes = (
@@ -582,6 +601,7 @@ class SQLiteAdapterConformanceTest(AdapterConformanceMixin, unittest.TestCase):
     DIALECT = "sqlite"
     build_fixture = staticmethod(build_sqlite_fixture)
     open_adapter = staticmethod(sqlite_adapter)
+    CONNECTOR_CLASS = SQLiteConnector
     DATE_FUNCTION_PROBE = (
         "SELECT strftime('%Y-%m', order_date) AS bucket FROM fact_orders"
     )
@@ -592,6 +612,7 @@ class DuckDBAdapterConformanceTest(AdapterConformanceMixin, unittest.TestCase):
     DIALECT = "duckdb"
     build_fixture = staticmethod(build_duckdb_fixture)
     open_adapter = staticmethod(duckdb_adapter)
+    CONNECTOR_CLASS = DuckDBConnector
     # DuckDB's read-only role additionally refuses ATTACH and config PRAGMA.
     ENGINE_REFUSED_EXTRA = ("ATTACH 'probe.db' AS other",)
     DATE_FUNCTION_PROBE = (

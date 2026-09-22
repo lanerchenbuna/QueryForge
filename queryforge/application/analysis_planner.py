@@ -324,6 +324,9 @@ class AnalysisPlannerService:
             validate_run_id(run_id)
 
         config = self.config_loader()
+        # Bound before the branch: the run's version identity is derived from the
+        # resolved domain when there is one, and stays unknown otherwise.
+        domain = None
         if domain_id:
             from queryforge.domain.domains import DomainResolver
             domain = DomainResolver.from_config(config).resolve(domain_id)
@@ -354,6 +357,11 @@ class AnalysisPlannerService:
         model_path = semantic_model_path or config.semantic_model_path
         budget_limits = BudgetLimits().merged(limits or {})
         budget = BudgetManager(limits=budget_limits)
+        # A resumed run inherits what the earlier attempt already spent. Without
+        # this the allowance reset on every resume, so a crashed-and-restarted run
+        # could spend its whole budget again while the journal showed the original
+        # consumption — the boundary only existed for runs that never restarted.
+        inherited: list[str] = []
 
         # One governed tool stack per analysis run: the connection and the policy
         # engine are opened here (fail fast on a bad database or policy), bound
@@ -414,6 +422,15 @@ class AnalysisPlannerService:
                 journal = resumer.journal
                 if resume:
                     resumer.assert_resumable()
+                    recorded = journal.budget() or {}
+                    inherited = budget.restore(recorded.get("usage"))
+                    if inherited:
+                        LOGGER.info(
+                            "budget_inherited run_id=%s keys=%s usage=%s",
+                            run_id,
+                            ",".join(inherited),
+                            {key: recorded.get("usage", {}).get(key) for key in inherited},
+                        )
                     persisted = resumer.load_plan()
                     if persisted is not None:
                         analysis_plan = persisted
@@ -429,6 +446,18 @@ class AnalysisPlannerService:
                 max_workers=self.max_workers,
                 mode=mode,
                 journal=journal,
+                # Bind the run's identities into every step fingerprint: a resume
+                # must not reuse a step computed against a different database
+                # snapshot, semantic model or SQL policy.
+                run_versions={
+                    "data_version": data_version,
+                    "semantic_version": (
+                        domain.semantic_version if domain is not None else None
+                    ),
+                    "policy_version": (
+                        domain.policy_version if domain is not None else None
+                    ),
+                },
                 worker_id=f"planner-{run_id or uuid4().hex[:6]}",
                 cancel_check=cancel_check,
                 force_resume=force_resume,

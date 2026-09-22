@@ -10,8 +10,12 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+from queryforge.core.paths import workspace_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+#: Repository/workspace root. Deliberately not ``Path(__file__).parents[2]``: that
+#: resolves to ``site-packages`` once the package is *installed* (E-22). See
+#: ``queryforge.core.paths`` for the resolution order.
+PROJECT_ROOT = workspace_root()
 DEFAULT_MODELS_CONFIG = PROJECT_ROOT / "models.yml"
 PACKAGED_MODELS_CONFIG = Path(__file__).with_name("default_models.yml")
 DEFAULT_DATABASE_PATH = "sample_data/anime_streaming/anime_streaming.sqlite"

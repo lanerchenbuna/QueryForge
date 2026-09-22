@@ -251,6 +251,10 @@ class AnalysisExecutionResult(BaseModel):
     status: str = "pending"
     replan_reasons: list[str] = Field(default_factory=list)
     budgets: dict[str, Any] = Field(default_factory=dict)
+    #: Usage inherited from an earlier attempt of this same run, when resuming.
+    #: ``budgets.usage`` is cumulative across attempts; this field lets a reader
+    #: tell inherited consumption from what this attempt spent.
+    inherited_usage: dict[str, Any] = Field(default_factory=dict)
     stop_reason: str | None = None
     reused_steps: list[str] = Field(default_factory=list)
     recomputed_steps: list[str] = Field(default_factory=list)
@@ -280,6 +284,7 @@ class AnalysisExecutor:
         max_steps: int = 32,
         clock: Callable[[], float] = time.monotonic,
         journal: ExecutionJournal | None = None,
+        run_versions: dict[str, Any] | None = None,
         worker_id: str = "worker",
         lease_ttl_seconds: float = 60.0,
         cancel_check: Callable[[], bool] | None = None,
@@ -301,6 +306,10 @@ class AnalysisExecutor:
         self.max_steps = max_steps
         self._clock = clock
         self.journal = journal
+        #: Data / semantic / policy versions this run binds to, threaded into every
+        #: step fingerprint so a resume cannot reuse a result computed against a
+        #: different database snapshot or a changed semantic model.
+        self.run_versions: dict[str, Any] = dict(run_versions or {})
         self.worker_id = worker_id
         self.lease_ttl_seconds = max(float(lease_ttl_seconds), 1.0)
         self.cancel_check = cancel_check
@@ -499,6 +508,14 @@ class AnalysisExecutor:
             )
 
         state = _ExecutionState(plan=plan, generated_by=self.budget_manager)
+        # Remembered on the state so the payload can distinguish "spent by this
+        # attempt" from "inherited from the earlier attempt" — a bare cumulative
+        # figure cannot express the difference.
+        state.inherited_usage = dict(
+            (self.journal.budget() or {}).get("usage") or {}
+            if self.journal is not None
+            else {}
+        )
         if self.journal is not None:
             if self.journal.journal.terminal() and not self.force_resume:
                 raise RunNotResumable(
@@ -506,7 +523,7 @@ class AnalysisExecutor:
                     f"{self.journal.journal.terminal_outcome!r}; refusing to revive it"
                 )
             self.journal.expire_leases()
-            self.journal.register_plan(plan)
+            self.journal.register_plan(plan, versions=self.run_versions)
             state.reuse_allowed, state.reuse_denied = self._reuse_plan(plan)
         plan.status = "running"
         base_context = self._base_context(tool_context)
@@ -636,7 +653,10 @@ class AnalysisExecutor:
         assert self.journal is not None
         for step in PlanValidator.topological_order(plan):
             fingerprint = self.journal.fingerprint_step(
-                step.action, dict(step.inputs or {}), plan_version=plan.version
+                step.action,
+                dict(step.inputs or {}),
+                plan_version=plan.version,
+                versions=self.journal.versions,
             )
             blocker = self._reuse_blocker(step)
             if blocker is not None:
@@ -808,7 +828,10 @@ class AnalysisExecutor:
         context = self._step_context(base_context, step, state)
         if self.journal is not None:
             fingerprint = self.journal.fingerprint_step(
-                step.action, dict(step.inputs or {}), plan_version=state.plan.version
+                step.action,
+                dict(step.inputs or {}),
+                plan_version=state.plan.version,
+                versions=self.journal.versions,
             )
             if state.reuse_allowed.get(step_id):
                 reused = self._reuse_step(step, step_id, context, state, result)
@@ -2008,6 +2031,8 @@ class _ExecutionState:
             step.id: StepResult(step_id=step.id, action=step.action) for step in plan.steps
         }
         self.evidence: list[dict[str, Any]] = []
+        #: Budget usage carried over from an earlier attempt of the same run.
+        self.inherited_usage: dict[str, Any] = {}
         self.evidence_by_kind: dict[str, str] = {}
         self.evidence_payloads: dict[str, dict[str, Any]] = {}
         self.answer: dict[str, Any] | None = None
@@ -2108,6 +2133,7 @@ class _ExecutionState:
             status=self.plan.status,
             replan_reasons=self.replan_reasons,
             budgets=budget_manager.snapshot(),
+            inherited_usage=dict(self.inherited_usage),
             stop_reason=self.stop_reason,
         )
 

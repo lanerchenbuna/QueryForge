@@ -195,7 +195,10 @@ class RunResumer:
         reusable: dict[str, bool] = {}
         for step in plan.steps:
             fingerprint = journal.fingerprint_step(
-                step.action, dict(step.inputs or {}), plan_version=plan.version
+                step.action,
+                dict(step.inputs or {}),
+                plan_version=plan.version,
+                versions=journal.versions,
             )
             record = journal.reusable_step(step.id, fingerprint)
             upstream_ok = all(reusable.get(item, False) for item in step.depends_on)

@@ -21,6 +21,7 @@ from queryforge.infrastructure.storage import (
     SQLHistoryStore,
 )
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+from queryforge.domain.knowledge import StructuredKnowledgeBase
 from queryforge.domain.security import load_sql_policy
 from queryforge.domain.semantic.builder import SemanticBuildError, SemanticModelBuilder
 
@@ -422,6 +423,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="SQL/Jinja/CSV file or directory included during rebuild; repeatable",
     )
     parser.add_argument(
+        "--kb-knowledge",
+        metavar="PATH",
+        help="JSON file holding governed structured knowledge (metrics, glossary, "
+        "sources) to include during --rebuild-vector-kb. Without this the governed "
+        "path is never exercised in a deployment, so the three-tier verification, "
+        "conflict detection and holdout isolation implemented in "
+        "domain/knowledge/governance.py do not run.",
+    )
+    parser.add_argument(
         "--show-history",
         action="store_true",
         help="Show recent persisted SQL history and exit",
@@ -611,6 +621,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if args.kb_knowledge and not args.rebuild_vector_kb:
+        print(
+            "QueryForge failed: --kb-knowledge requires --rebuild-vector-kb",
+            file=sys.stderr,
+        )
+        return 2
     if vector_action:
         if args.vector_top_k < 0 or args.vector_top_k > 20:
             print(
@@ -664,13 +680,37 @@ def main() -> int:
                 builder = KnowledgeBaseBuilder(
                     vector_store, manifest_path=manifest_path
                 )
+                knowledge = None
+                if args.kb_knowledge:
+                    knowledge_path = Path(args.kb_knowledge).expanduser()
+                    if not knowledge_path.is_file():
+                        print(
+                            f"QueryForge failed: --kb-knowledge file not found: {knowledge_path}",
+                            file=sys.stderr,
+                        )
+                        return 2
+                    knowledge = StructuredKnowledgeBase.load(
+                        knowledge_path.read_text(encoding="utf-8")
+                    )
                 result["rebuild"] = builder.rebuild(
                     history_store=history_store,
                     schemas=schemas,
                     sources=args.kb_source,
+                    # The governed path is only reachable when a structured
+                    # knowledge base is supplied; passing it here is what makes
+                    # build_governed_documents (verification tiers, conflict
+                    # detection, holdout isolation) run outside tests.
+                    knowledge=knowledge,
                 )
                 result["manifest_path"] = str(manifest_path)
                 result["sources"] = [str(Path(path).expanduser()) for path in args.kb_source]
+                if knowledge is not None:
+                    result["knowledge"] = {
+                        "path": str(Path(args.kb_knowledge).expanduser()),
+                        "metrics": len(knowledge.metrics),
+                        "glossary": len(knowledge.glossary),
+                        "sources": len(knowledge.sources),
+                    }
             if args.kb_stats:
                 result["stats"] = vector_store.stats()
         except Exception as exc:
