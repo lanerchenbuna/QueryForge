@@ -6,7 +6,7 @@ from queryforge.application.options import AgentOptions
 from queryforge.core.config import Config
 from queryforge.core.schemas.models import Context, SQLContext, SqlTask
 from queryforge.domain.security import load_sql_policy
-from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
+from queryforge.infrastructure.db.adapters import open_database as SQLiteConnector
 from queryforge.infrastructure.storage import SQLHistoryStore
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 from queryforge.infrastructure.tools.reference_sql_tool import ReferenceSqlTool
@@ -215,9 +215,21 @@ class DirectTaskExecutor:
             raise ValueError(schema_result.error or "Could not inspect database schema")
         if options.history_top_k > 0:
             try:
-                context.history_matches = SQLHistoryStore(
-                    config.history_db_path
-                ).search(context.task.question, top_k=options.history_top_k)
+                # This is the second production reader of the same history table.
+                # It must apply the same governance as the workflow reader
+                # (`WorkflowRunner`): a run bound to a data domain may not be fed
+                # another domain's SQL as a few-shot example, and only examples a
+                # human reviewed (or the curated import) count as trusted
+                # positives — execution success alone does not prove correctness.
+                store = SQLHistoryStore(config.history_db_path)
+                result = store.search_with_evidence(
+                    context.task.question,
+                    top_k=options.history_top_k,
+                    domain_id=getattr(options, "domain_id", None),
+                    trusted_only=True,
+                )
+                context.history_matches = result.matches
+                context.task_context["history_retrieval"] = result.evidence
             except Exception as exc:
                 context.history_error = str(exc)
                 context.history_write_status = "failed"

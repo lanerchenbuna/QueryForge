@@ -28,6 +28,7 @@ CORE_CHECKS = (
     ),
     Check("dependency_consistency", ("-m", "pip", "check")),
     Check("bundled_sample_data", ("-m", "queryforge", "--prepare-sample-data")),
+    Check("auxiliary_sample_data", ("sample/generate_aux_datasets.py",)),
     Check("workflow_entry", ("-m", "queryforge", "--show-workflow")),
     Check("model_registry", ("-m", "queryforge", "--list-models")),
     Check("skill_registry", ("-m", "queryforge", "--list-skills")),
@@ -76,6 +77,13 @@ CORE_CHECKS = (
     ),
     Check("phase_a_performance_baseline", ("scripts/benchmark_phase_a.py",)),
     Check("phase_bc_performance_baseline", ("scripts/benchmark_phase_bc.py",)),
+    # Step 16: the deterministic agent-task benchmark is a required, offline
+    # gate. It runs the planned-analysis path (no model call) plus the SQL
+    # policy probes through the real policy engine.
+    Check(
+        "agent_task_benchmark",
+        ("scripts/benchmark_agent.py", "--tier", "1", "--gate"),
+    ),
 )
 
 FULL_CHECK = Check(

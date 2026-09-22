@@ -1,4 +1,4 @@
-.PHONY: help install install-all test acceptance check sample semantic-check package web-install web-dev web-check web-build
+.PHONY: help install demo install-all test acceptance check sample semantic-check package web-install web-dev web-check web-build
 
 PYTHON ?= python
 
@@ -6,6 +6,7 @@ help:
 	@echo "install         Install QueryForge in editable mode"
 	@echo "install-all     Install all optional integrations"
 	@echo "test            Run the complete unittest suite"
+	@echo "demo            Run the step-17 end-to-end acceptance demos"
 	@echo "acceptance      Run offline acceptance checks"
 	@echo "check           Run repository hygiene and full acceptance"
 	@echo "sample          Validate the bundled anime dataset"
@@ -24,6 +25,9 @@ install-all:
 
 test:
 	LOG_LEVEL=CRITICAL $(PYTHON) -m unittest discover -s tests -q
+
+demo:
+	$(PYTHON) docs/demo/run_all.py
 
 acceptance:
 	$(PYTHON) scripts/run_acceptance.py --full

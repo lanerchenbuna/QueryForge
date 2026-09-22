@@ -41,6 +41,27 @@ class AgentTeamStateStore:
         self._atomic_json(path, state.model_dump(mode="json"))
         return path
 
+    def load_state(self, run_id: str) -> TaskState | None:
+        """Read a persisted run state back, or ``None`` when it does not exist.
+
+        The reader exists so the persisted document is a real contract: a
+        cancelled run (``status="cancelled"``, written by the streaming cancel
+        path) must validate back into :class:`TaskState` instead of failing a
+        future reader. A corrupt or unreadable document raises ``ValueError``
+        rather than being silently treated as "no state".
+        """
+        path = self.run_dir(run_id) / "state.json"
+        if not path.is_file():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"Could not read run state {run_id!r}: {exc}") from exc
+        try:
+            return TaskState.model_validate(payload)
+        except Exception as exc:
+            raise ValueError(f"Run state {run_id!r} is not a valid TaskState: {exc}") from exc
+
     def write_artifact(
         self,
         state: TaskState,

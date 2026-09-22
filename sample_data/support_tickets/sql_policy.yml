@@ -1,0 +1,29 @@
+version: 1
+name: support_tickets_analyst
+
+allowed_tables:
+  - dim_date
+  - dim_agent
+  - dim_queue
+  - fact_ticket
+  - fact_ticket_sla_breach
+  - fact_csat_response
+
+# Free-text survey verbatims stay out of analytical reach; the structured survey
+# fields (score, channel, dates) remain available.
+allowed_columns:
+  fact_csat_response:
+    - response_id
+    - ticket_id
+    - response_date_key
+    - agent_id
+    - csat_score
+    - response_channel
+    - escalation_reason
+
+dangerous_functions: [randomblob]
+require_limit: false
+max_limit: 1000
+max_tables: 8
+max_joins: 7
+allow_cross_join: false

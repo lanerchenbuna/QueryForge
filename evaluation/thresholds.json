@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "tier1_offline": {
+    "min_task_success_rate": 1.0,
+    "min_evidence_coverage_rate": 0.95,
+    "max_unsupported_assertion_rate": 0.0,
+    "min_tool_legality_rate": 1.0,
+    "min_clarification_appropriateness": 1.0,
+    "max_avg_tool_calls_per_task": 12,
+    "splits": {
+      "regression": {
+        "min_task_success_rate": 1.0
+      }
+    }
+  },
+  "tier2_integration": {
+    "required_dependencies": [
+      "fastapi",
+      "httpx",
+      "mcp",
+      "lancedb",
+      "pyarrow",
+      "duckdb",
+      "multipart"
+    ],
+    "min_task_success_rate": 0.9
+  },
+  "tier3_model_e2e": {
+    "note": "Uncalibrated: no real model baseline has been run. Report-only; freeze thresholds after a baseline and before the next experiment."
+  }
+}

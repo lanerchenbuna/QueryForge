@@ -8,6 +8,15 @@ from queryforge.orchestration.agents.base import RoleAgent
 from queryforge.orchestration.schemas import ArtifactRef, TaskState
 from queryforge.orchestration.schemas.session import SessionMemory
 from queryforge.core.schemas.models import Context
+from queryforge.domain.analysis import (
+    DEFAULT_TIMEZONE,
+    AnalysisRequest,
+    detect_comparison_baseline,
+    detect_time_grain,
+    high_impact_question,
+    is_high_impact_ambiguity,
+    time_range_text,
+)
 
 
 class ProductAnalystAgent(RoleAgent):
@@ -259,6 +268,22 @@ class ProductAnalystAgent(RoleAgent):
                 "The request references prior context that is not available in this run."
             )
             ambiguities.append("missing_conversation_context")
+        # High-impact ambiguity (ungoverned business definitions, growth without
+        # a baseline) is never silently assumed: it blocks business SQL and asks
+        # the caller to confirm the definition.
+        high_impact = is_high_impact_ambiguity(
+            question,
+            AnalysisRequest(metric_ids=list(metric_names), dimensions=list(dimensions)),
+        )
+        for aspect in high_impact:
+            if aspect in ambiguities:
+                continue
+            message = high_impact_question(aspect)
+            clarifications.append(
+                {"aspect": aspect, "question": message, "severity": "high"}
+            )
+            clarification_reasons.append(message)
+            ambiguities.append(aspect)
         blocked = any(item["severity"] == "high" for item in clarifications)
         artifact_status = "blocked" if blocked else "warning" if clarifications else "valid"
         time_range = (
@@ -266,9 +291,32 @@ class ProductAnalystAgent(RoleAgent):
             if context.date_context and context.date_context.ranges
             else None
         )
+        typed = AnalysisRequest(
+            intent="ask_sql",
+            metric_ids=list(metric_names),
+            dimensions=list(dimensions),
+            filters=[{"expression": item} for item in filters],
+            time_range=time_range_text(
+                context.date_context.model_dump(mode="json")
+                if context.date_context and context.date_context.ranges
+                else None
+            ),
+            # MVP: the timezone is a documented constant until transports can
+            # carry a governed per-request zone.
+            timezone=DEFAULT_TIMEZONE,
+            time_grain=detect_time_grain(question),
+            comparison_baseline=detect_comparison_baseline(question),
+            assumptions=list(assumptions),
+            unresolved_questions=list(ambiguities),
+            output=None,
+            top_n=int(limit_match.group(1)) if limit_match else None,
+            clarifications=clarifications,
+            status=artifact_status,
+        )
         return self.emit(
             state,
             {
+                **typed.model_dump(mode="json"),
                 "question": question,
                 "goal": question,
                 "objective": question,

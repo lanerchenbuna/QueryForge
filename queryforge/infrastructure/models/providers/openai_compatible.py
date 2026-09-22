@@ -39,6 +39,10 @@ class OpenAICompatibleProvider(BaseModelProvider):
         }
         if json_mode and self.supports_response_format:
             request["response_format"] = {"type": "json_object"}
+        # Step 14: a fresh call starts with no measured usage, so a response that
+        # omits ``usage`` is reported as estimated instead of reusing the
+        # previous call's real numbers (and never as a fake zero).
+        self.last_usage = None
         try:
             response = self._client.chat.completions.create(**request)
         except Exception as exc:
@@ -46,6 +50,9 @@ class OpenAICompatibleProvider(BaseModelProvider):
                 f"Model request failed for provider={self.provider}, "
                 f"model={self.model}: {exc}"
             ) from exc
+        # Usage is recorded before the content check: tokens consumed on a call
+        # whose response cannot be used were still billed.
+        self.record_usage(getattr(response, "usage", None))
         content = response.choices[0].message.content
         if not content:
             raise ModelResponseError("Model returned an empty response", "")

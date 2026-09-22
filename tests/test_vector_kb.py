@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import importlib.util
 import sys
@@ -95,6 +96,28 @@ class DeterministicEmbedding:
             ]
             for text in texts
         ]
+
+
+class BagOfWordsEmbedding:
+    """Deterministic bag-of-words vectors: identical text, identical vector.
+
+    Used by the LanceDB candidate-constraint tests, where the scenario depends on
+    which documents are nearest to the query: the excluded rows must be able to
+    fill a small ANN window on their own.
+    """
+
+    def __init__(self, size: int = 16) -> None:
+        self.size = size
+
+    def embed(self, texts):
+        vectors = []
+        for text in texts:
+            vector = [0.0] * self.size
+            for word in text.lower().split():
+                digest = hashlib.sha256(word.encode("utf-8")).hexdigest()
+                vector[int(digest, 16) % self.size] += 1.0
+            vectors.append(vector)
+        return vectors
 
 
 class VectorWorkflowLLM:
@@ -281,6 +304,157 @@ class VectorKnowledgeBaseTest(unittest.TestCase):
         stats = store.rebuild(documents[:1])
         self.assertEqual(stats["total"], 1)
         self.assertEqual(stats["tables"]["schema_doc_vectors"], 0)
+
+
+@unittest.skipUnless(importlib.util.find_spec("lancedb"), "optional lancedb not installed")
+class LanceDBGovernanceContractTest(unittest.TestCase):
+    """H10/H11: the real backend's candidate constraints and delete guard."""
+
+    QUESTION = "orders by region tv show"
+    GOVERNED_SOURCE_TYPES = (
+        "schema_doc",
+        "metric_knowledge",
+        "glossary",
+        "knowledge_document",
+    )
+
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.store = LanceDBVectorStore(
+            Path(self.directory.name) / "kb",
+            embedding_provider=BagOfWordsEmbedding(),
+        )
+
+    def test_source_types_constrain_candidates_instead_of_post_filtering(self):
+        """H10: a governed channel must not be emptied by excluded neighbours.
+
+        ``source_types`` was applied *after* the ANN window was cut to
+        ``top_k * 5``, so a store whose window is filled with ``sql_history`` rows
+        returned ``[]`` for the governed-document channel even though a
+        ``metric_knowledge`` document existed — the production reader at
+        ``SchemaLinkingNode._retrieve_vector_context``.
+        """
+        self.store.upsert_documents(
+            [
+                *[
+                    VectorDocument.create(
+                        id=f"history:{index}",
+                        text=self.QUESTION,
+                        source_type="sql_history",
+                        metadata={},
+                    )
+                    for index in range(12)
+                ],
+                VectorDocument.create(
+                    id="metric:gmv",
+                    text="orders by region metric gross margin",
+                    source_type="metric_knowledge",
+                    metadata={},
+                ),
+            ]
+        )
+        # The premise: an unconstrained top_k=1 window holds an excluded row.
+        window = self.store.search(self.QUESTION, top_k=1)
+        self.assertEqual([match.source_type for match in window], ["sql_history"])
+        self.assertEqual(window[0].score, 1.0)
+
+        governed = self.store.search(
+            self.QUESTION, top_k=1, source_types=self.GOVERNED_SOURCE_TYPES
+        )
+        self.assertEqual([match.id for match in governed], ["metric:gmv"])
+        self.assertEqual(governed[0].source_type, "metric_knowledge")
+        # A legal lower-similarity governed document is recalled, not hidden.
+        self.assertLess(governed[0].score, window[0].score)
+        # Excluding every source type is an explicit empty selection, not an
+        # accidental "no constraint".
+        self.assertEqual(
+            self.store.search(self.QUESTION, top_k=1, source_types=("glossary",)),
+            [],
+        )
+
+    def test_source_types_and_filters_are_both_applied_to_candidates(self):
+        """H10 control: the constraint composes with governance filters."""
+        self.store.upsert_documents(
+            [
+                VectorDocument.create(
+                    id="schema:orders",
+                    text="orders by region columns",
+                    source_type="schema_doc",
+                    metadata={"domain_id": "commerce"},
+                ),
+                VectorDocument.create(
+                    id="schema:secrets",
+                    text="orders by region columns",
+                    source_type="schema_doc",
+                    metadata={"domain_id": "finance"},
+                ),
+                VectorDocument.create(
+                    id="history:1",
+                    text="orders by region columns",
+                    source_type="sql_history",
+                    metadata={"domain_id": "commerce"},
+                ),
+            ]
+        )
+        matches = self.store.search(
+            "orders by region columns",
+            top_k=5,
+            source_types=("schema_doc",),
+            filters={"domain_id": "commerce"},
+        )
+        self.assertEqual([match.id for match in matches], ["schema:orders"])
+
+    def test_delete_refuses_a_filter_without_any_effective_value(self):
+        """H11: "not requested" must never mean "matches everything" for delete.
+
+        Only ``filters={}`` was refused; a filter whose only key was ``None`` (or
+        an empty list) matched every document, so ``delete_documents(filters=
+        {"domain_id": None})`` wiped both vector tables.
+        """
+        self.store.upsert_documents(
+            [
+                VectorDocument.create(
+                    id="schema:orders",
+                    text="orders columns",
+                    source_type="schema_doc",
+                    metadata={"domain_id": "commerce"},
+                ),
+                VectorDocument.create(
+                    id="history:1",
+                    text="orders",
+                    source_type="sql_history",
+                    metadata={"domain_id": "commerce"},
+                ),
+            ]
+        )
+        for refused in (
+            {"domain_id": None},
+            {},
+            {"permissions": []},
+            {"domain_id": ""},
+            {"domain_id": "   "},
+        ):
+            with self.assertRaisesRegex(
+                VectorStoreError, "refusing to delete everything"
+            ):
+                self.store.delete_documents(filters=refused)
+        with self.assertRaisesRegex(VectorStoreError, "refusing to delete everything"):
+            self.store.delete_documents()
+        self.assertEqual(self.store.stats()["total"], 2)
+
+        # A valueless filter never widens an explicit id list into a table wipe.
+        self.assertEqual(
+            self.store.delete_documents(ids=["history:1"], filters={"domain_id": None}),
+            1,
+        )
+        self.assertEqual(self.store.stats()["total"], 1)
+
+        # A filter that names a real value still deletes exactly its matches.
+        self.assertEqual(
+            self.store.delete_documents(filters={"domain_id": "commerce"}), 1
+        )
+        self.assertEqual(self.store.stats()["total"], 0)
 
 
 if __name__ == "__main__":

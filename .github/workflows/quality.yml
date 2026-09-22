@@ -28,6 +28,10 @@ jobs:
         working-directory: web
 
   offline-acceptance:
+    # Tier 1 of the step-16 evaluation: deterministic, offline, no model call.
+    # `scripts/run_acceptance.py --full` includes the agent task benchmark gate
+    # (`scripts/benchmark_agent.py --tier 1 --gate`), so a regression in task
+    # success, evidence coverage or tool legality fails this job.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -44,6 +48,33 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e .
       - run: python scripts/run_acceptance.py --full
+
+  offline-acceptance-integration:
+    # Tier 2 of the step-16 evaluation: installs the optional transport
+    # integrations (REST API, MCP) and then *requires* them. A missing
+    # dependency fails the tier instead of silently skipping it (16-R1), which
+    # is why `benchmark_agent.py --tier 2 --gate` is part of this job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[all,duckdb]"
+      - run: python -m queryforge --prepare-sample-data
+      - run: python sample/generate_aux_datasets.py
+      - run: python -m unittest discover -s tests -q
+      - run: python scripts/benchmark_agent.py --tier 2 --gate
+      - run: python docs/demo/run_all.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-reports
+          path: evaluation/reports/
 
   package:
     runs-on: ubuntu-latest

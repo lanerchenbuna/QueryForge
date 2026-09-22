@@ -136,6 +136,25 @@ def load_sql_policy(
     return policy, str(policy_path)
 
 
+#: Relation-name prefixes owned by the database engine itself. Reading them
+#: exposes schema metadata (and on some engines more), and no governed query has
+#: a legitimate reason to name one, so they are refused even when the policy was
+#: built without physical schema metadata.
+_ENGINE_INTERNAL_PREFIXES = (
+    "sqlite_",
+    "information_schema",
+    "pg_",
+    "mysql.",
+    "duckdb_",
+    "system.",
+)
+
+
+def _is_engine_internal_relation(name: str) -> bool:
+    lowered = str(name).casefold().strip()
+    return lowered.startswith(_ENGINE_INTERNAL_PREFIXES)
+
+
 class SQLPolicyEngine:
     """Validate AST structure, data scope, functions, and result bounds."""
 
@@ -146,10 +165,12 @@ class SQLPolicyEngine:
         *,
         source_path: str | None = None,
         audit: bool = True,
+        dialect: str = "sqlite",
     ) -> None:
         self.policy = policy
         self.source_path = source_path
         self.audit = audit
+        self.dialect = dialect
         self.schemas = {schema.table_name: schema for schema in schemas}
         self._table_lookup = {name.casefold(): name for name in self.schemas}
         self._validate_configuration()
@@ -201,7 +222,7 @@ class SQLPolicyEngine:
         try:
             statements = [
                 statement
-                for statement in sqlglot.parse(sql, read="sqlite")
+                for statement in sqlglot.parse(sql, read=self.dialect)
                 if statement is not None and not isinstance(statement, exp.Semicolon)
             ]
         except ParseError as exc:
@@ -274,8 +295,31 @@ class SQLPolicyEngine:
             for alias, source in scope.sources.items():
                 if not isinstance(source, exp.Table):
                     continue
+                if self.dialect == "duckdb" and (source.catalog or source.db not in ("", "main") or not isinstance(source.this, exp.Identifier)):
+                    raise self._violation("catalog_scope", "Only physical tables in the current main schema are supported")
                 table = self._canonical_table(source.name)
                 if table is None:
+                    # Silently skipping an unknown table let SQLite read
+                    # engine-internal relations such as `sqlite_master` (verified:
+                    # that statement was allowed while DuckDB refused it), so the
+                    # default backend had a policy blind spot the other backend did
+                    # not. Fail closed whenever the engine can be held to it: always
+                    # for a backend that enforces table scope itself, and for any
+                    # backend once the physical schema is known. A policy built
+                    # without schema metadata cannot tell "unknown" from
+                    # "undiscovered", so there only engine-internal relations are
+                    # refused instead of every table.
+                    if (
+                        self.dialect == "duckdb"
+                        or self.schemas
+                        or _is_engine_internal_relation(source.name)
+                    ):
+                        raise self._violation(
+                            "table_scope",
+                            f"Unknown or unauthorized table {source.name!r} in "
+                            f"dialect {self.dialect!r}",
+                            tables=[str(source.name)],
+                        )
                     continue
                 physical_sources[alias.casefold()] = table
                 referenced_tables.add(table)

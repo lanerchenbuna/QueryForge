@@ -99,6 +99,22 @@ class ReportArtifactTest(unittest.TestCase):
         chart = next(section for section in artifact.sections if section.type == "chart")
         self.assertEqual(chart.content["chart_type"], "line")
 
+    def test_chart_spec_escapes_script_breakout(self):
+        payload = "</script><script>alert(1)</script>"
+        artifact = ReportGenerator(self.root / "reports").generate(
+            self.context(
+                columns=["category", "total"],
+                rows=[[payload, 10], ["music", 5]],
+            )
+        )
+        html = Path(artifact.file_path).read_text(encoding="utf-8")
+        self.assertIn("vegaEmbed", html)
+        # The user-controlled value must never terminate the enclosing script tag.
+        self.assertNotIn("</script><script>", html)
+        self.assertIn("<\\/script><script>", html)
+        # The regular HTML table context remains entity-escaped.
+        self.assertIn("&lt;/script&gt;", html)
+
     def test_generator_uses_metric_cards_for_scalar_result(self):
         artifact = ReportGenerator(self.root / "reports").generate(
             self.context(columns=["total"], rows=[[35]])

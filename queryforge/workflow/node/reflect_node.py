@@ -8,6 +8,7 @@ from queryforge.workflow.node.base import Node
 from queryforge.infrastructure.models.base import BaseModelProvider, ModelResponseError
 from queryforge.core.schemas.models import Context, NodeResult, ReflectionResult
 from queryforge.domain.skills import SkillManager
+from queryforge.workflow.errors import record_error_category
 
 
 class ReflectNode(Node):
@@ -33,11 +34,13 @@ class ReflectNode(Node):
                 )
             context.reflection_result = reflection
         except ModelResponseError as exc:
+            record_error_category(context, exc)
             return self.failure(
                 f"Reflection response is not valid JSON: {exc}; "
                 f"raw_output={exc.raw_output[:1000]!r}"
             )
         except Exception as exc:
+            record_error_category(context, exc)
             return self.failure(f"Could not reflect on SQL result: {exc}")
         return self.success(
             f"Reflection strategy={context.reflection_result.strategy}"
@@ -84,7 +87,10 @@ Rules:
 - An empty result can be valid; do not reject it without schema, filter, or join evidence.
 - Check requested metric, grain, joins, filters, dates, ordering, limits, and columns.
 - If structured metrics are matched, verify that SQL preserves their aggregation
-  expressions, every default filter, allowed grouping dimensions, and time_field.
+  expressions, every default filter (including the exact compared value), allowed
+  grouping dimensions, and time_field.
+- Treat a recorded typed error category as authoritative: never propose to relax
+  access control or budgets, and never redefine a metric to force a non-empty result.
 - Verify that every cross-entity metric dimension follows the supplied Join Path exactly.
   Reject extra joins or reversed one-to-many steps that multiply the metric base grain.
 - Do not invent facts not visible in the supplied context or sample.
@@ -132,6 +138,12 @@ Structured reasoning summary (audit data, not hidden chain-of-thought):
 
 Reasoning versus SQL validation:
 {json.dumps(context.reasoning_validation, ensure_ascii=False, indent=2)}
+
+Typed error categories observed in this run (authoritative; may be empty):
+{json.dumps(context.task_context.get("error_categories", []), ensure_ascii=False)}
+
+AST business-semantic validation of the current SQL (may be null):
+{json.dumps(context.task_context.get("semantic_validation"), ensure_ascii=False, indent=2)}
 
 Loaded reflection skills:
 {skills}

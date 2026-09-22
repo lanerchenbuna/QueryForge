@@ -14,6 +14,7 @@ class AgentOptions:
     """Transport-neutral request options with centralized budget validation."""
 
     database: str | None = None
+    domain_id: str | None = None
     semantic_model_path: str | None = None
     allow_schema_only: bool = False
     subject_tree_enabled: bool = False
@@ -96,6 +97,8 @@ class AgentOptions:
             self.subject_tree_enabled or config.subject_tree_enabled
         ):
             raise ValueError("subject requires subject_tree_enabled")
+        if self.domain_id is not None and not self.domain_id.strip():
+            raise ValueError("domain_id must be non-blank when provided")
 
     @staticmethod
     def _between(

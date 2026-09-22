@@ -12,6 +12,16 @@ from typing import Any
 from queryforge.workflow.node.visualization_node import VisualizationNode
 from queryforge.core.schemas.models import Context
 from queryforge.core.schemas.report import ReportArtifact, ReportSection
+from queryforge.domain.analysis.evidence import (
+    EvidenceStore,
+    FinalAnswer,
+    TRACEABILITY_COLUMNS,
+    apply_validation,
+    load_evidence_store,
+    summarize_completeness,
+    traceability_rows,
+    validate_answer,
+)
 
 
 DEFAULT_REPORT_OUTPUT_DIR = ".queryforge/reports"
@@ -32,7 +42,20 @@ class ReportGenerator:
         self.max_rows = max_rows
         self.max_charts = max_charts
 
-    def generate(self, context: Context) -> ReportArtifact:
+    def generate(
+        self,
+        context: Context,
+        *,
+        evidence: Any = None,
+        final_answer: Any = None,
+    ) -> ReportArtifact:
+        """Render the static report.
+
+        ``evidence`` / ``final_answer`` are optional step-12 payloads
+        (``EvidenceStore``, lists of evidence, or ``FinalAnswer``); when omitted
+        they are read from ``context.task_context`` and ``context.final_output``,
+        so the existing ``generate(context)`` call site keeps working unchanged.
+        """
         if context.sql_context is None or context.execution_result is None:
             raise ValueError("Report generation requires SQL and execution results")
         execution = context.execution_result
@@ -43,7 +66,16 @@ class ReportGenerator:
             f"Query returned {execution.row_count} row(s) across "
             f"{len(execution.columns)} column(s)."
         )
-        charts = self._charts(context, self.max_charts)
+        store, answer, evidence_issues = self._evidence_layer(context, evidence, final_answer)
+        displayed_rows = min(execution.row_count, self.max_rows)
+        completeness = summarize_completeness(
+            total_row_count=execution.row_count,
+            displayed_row_count=displayed_rows,
+            evidence=store.all(),
+            answer=answer,
+            extra_notes=evidence_issues,
+        )
+        charts = self._charts(context, self.max_charts, store)
         sections = [
             ReportSection(
                 id="summary",
@@ -66,6 +98,12 @@ class ReportGenerator:
                     "rows": execution.rows[: self.max_rows],
                     "truncated": execution.row_count > self.max_rows,
                     "total_rows": execution.row_count,
+                    # Display truncation (this table) and analysis completeness
+                    # (the input the numbers were computed over) are separate
+                    # facts and are never derived from each other.
+                    "display_truncated": completeness["display_truncated"],
+                    "displayed_rows": completeness["displayed_row_count"],
+                    "analysis_complete": completeness["analysis_complete"],
                 },
             ),
             *charts,
@@ -89,6 +127,7 @@ class ReportGenerator:
                 type="text",
                 content={"items": findings},
             ),
+            *self._evidence_sections(store, answer, completeness),
         ]
         self.output_dir.mkdir(parents=True, exist_ok=True)
         report_path = self.output_dir / f"{context.run_id}.html"
@@ -111,6 +150,152 @@ class ReportGenerator:
             encoding="utf-8",
         )
         return artifact
+
+    # -- step 12: evidence layer -------------------------------------------
+    @classmethod
+    def _evidence_layer(
+        cls,
+        context: Context,
+        evidence: Any,
+        final_answer: Any,
+    ) -> tuple[EvidenceStore, FinalAnswer | None, list[str]]:
+        """Load evidence/answer payloads and re-validate the answer.
+
+        A payload that cannot be loaded never aborts report generation: the
+        reason is returned so the report can state it explicitly.
+        """
+        raw_evidence = evidence if evidence is not None else cls._context_payload(context, "evidence")
+        raw_answer = (
+            final_answer if final_answer is not None else cls._context_payload(context, "final_answer")
+        )
+        store, error = load_evidence_store(raw_evidence)
+        issues: list[str] = []
+        if error:
+            issues.append(
+                f"Evidence payload was rejected ({error}); the traceability table is incomplete."
+            )
+        answer: FinalAnswer | None = None
+        if raw_answer is not None:
+            try:
+                answer = (
+                    raw_answer
+                    if isinstance(raw_answer, FinalAnswer)
+                    else FinalAnswer.model_validate(raw_answer)
+                )
+            except Exception as exc:  # invalid answer shape: degrade visibly
+                issues.append(
+                    f"Final answer payload was rejected ({type(exc).__name__}: {exc}); "
+                    "the report shows the raw query results only."
+                )
+        if answer is not None:
+            problems = validate_answer(answer, store)
+            if problems:
+                answer = apply_validation(answer, problems)
+        return store, answer, issues
+
+    @staticmethod
+    def _context_payload(context: Context, key: str) -> Any:
+        task_context = context.task_context if isinstance(context.task_context, dict) else {}
+        if key in task_context:
+            return task_context.get(key)
+        final_output = context.final_output if isinstance(context.final_output, dict) else {}
+        return final_output.get(key)
+
+    @classmethod
+    def _evidence_sections(
+        cls,
+        store: EvidenceStore,
+        answer: FinalAnswer | None,
+        completeness: dict[str, Any],
+    ) -> list[ReportSection]:
+        sections: list[ReportSection] = []
+        if answer is not None:
+            if answer.conclusions:
+                sections.append(
+                    ReportSection(
+                        id="answer_conclusions",
+                        title="Conclusions",
+                        type="text",
+                        content={"items": list(answer.conclusions)},
+                    )
+                )
+            if answer.findings:
+                sections.append(
+                    ReportSection(
+                        id="evidence_findings",
+                        title="Evidence-Backed Findings",
+                        type="text",
+                        content={
+                            "items": [cls._finding_line(finding) for finding in answer.findings],
+                            "findings": [
+                                finding.model_dump(mode="json") for finding in answer.findings
+                            ],
+                            "review_required": answer.review_required,
+                            "degraded": answer.degraded,
+                        },
+                    )
+                )
+            caveats = (
+                [f"Assumption: {item}" for item in answer.assumptions]
+                + [f"Limitation: {item}" for item in answer.limitations]
+                + [f"Open question: {item}" for item in answer.open_questions]
+            )
+            if caveats:
+                sections.append(
+                    ReportSection(
+                        id="answer_caveats",
+                        title="Assumptions, Limitations & Open Questions",
+                        type="text",
+                        content={
+                            "items": caveats,
+                            "assumptions": list(answer.assumptions),
+                            "limitations": list(answer.limitations),
+                            "open_questions": list(answer.open_questions),
+                        },
+                    )
+                )
+        if len(store):
+            sections.append(
+                ReportSection(
+                    id="evidence_traceability",
+                    title="Evidence Traceability",
+                    type="table",
+                    content={
+                        "columns": list(TRACEABILITY_COLUMNS),
+                        "rows": traceability_rows(store.all()),
+                        "truncated": False,
+                        "total_rows": len(store),
+                        "evidence_ids": store.ids(),
+                    },
+                )
+            )
+        sections.append(
+            ReportSection(
+                id="completeness",
+                title="Completeness",
+                type="text",
+                content={
+                    "items": list(completeness["notes"]),
+                    **{key: value for key, value in completeness.items() if key != "notes"},
+                },
+            )
+        )
+        return sections
+
+    @staticmethod
+    def _finding_line(finding: Any) -> str:
+        numbers = ", ".join(
+            f"{key}={value}" for key, value in finding.numbers.items()
+        ) or "no numbers"
+        flags = []
+        if finding.degraded:
+            flags.append("degraded")
+        if finding.review_required:
+            flags.append("review required")
+        suffix = f" [{', '.join(flags)}]" if flags else ""
+        evidence = ", ".join(finding.evidence_ids) or "no evidence cited"
+        return f"{finding.statement} (numbers: {numbers}) — evidence: {evidence}{suffix}"
+
 
     @staticmethod
     def _classify_columns(
@@ -179,7 +364,11 @@ class ReportGenerator:
         return findings[:5]
 
     @staticmethod
-    def _charts(context: Context, max_charts: int) -> list[ReportSection]:
+    def _charts(
+        context: Context,
+        max_charts: int,
+        store: EvidenceStore | None = None,
+    ) -> list[ReportSection]:
         execution = context.execution_result
         sql_context = context.sql_context
         assert execution is not None and sql_context is not None
@@ -191,6 +380,9 @@ class ReportGenerator:
         )
         if visualization.chart_type == "table" or max_charts == 0:
             return []
+        semantics = ReportGenerator._chart_semantics(
+            visualization.chart_type, execution.row_count, store
+        )
         return [
             ReportSection(
                 id="chart_1",
@@ -200,9 +392,64 @@ class ReportGenerator:
                     "chart_type": visualization.chart_type,
                     "spec": visualization.chart_config,
                     "reason": visualization.reason,
+                    # Chart semantics come from the metric kind and the grain of
+                    # the cited evidence, not from the chart type alone.
+                    "metric_kind": semantics["metric_kind"],
+                    "grain": semantics["grain"],
+                    "unit": semantics["unit"],
+                    "semantics": semantics["text"],
+                    "evidence_ids": semantics["evidence_ids"],
                 },
             )
         ]
+
+    @staticmethod
+    def _chart_semantics(
+        chart_type: str,
+        row_count: int,
+        store: EvidenceStore | None,
+    ) -> dict[str, Any]:
+        metric_kind: str | None = None
+        grain: str | None = None
+        unit: str | None = None
+        citations: list[str] = []
+        for evidence in list(store or ()):
+            payload = evidence.payload if isinstance(evidence.payload, dict) else {}
+            if evidence.kind == "metric_resolution" and not metric_kind:
+                metric_kind = (
+                    payload.get("metric_kind")
+                    or payload.get("aggregation")
+                    or payload.get("measure")
+                )
+            if not grain:
+                grain = evidence.grain or payload.get("grain")
+            if not unit:
+                unit = evidence.unit or payload.get("unit")
+            if evidence.kind in {"metric_resolution", "sql_result"}:
+                citations.append(evidence.id)
+            if metric_kind and grain and unit:
+                break
+        parts = [
+            f"metric kind: {metric_kind or 'unspecified'}",
+            f"grain: {grain or 'unspecified'}",
+            f"unit: {unit or 'unspecified'}",
+        ]
+        if chart_type == "line" and not grain:
+            parts.append(
+                "the x-axis could not be confirmed as a time grain; the line shape is "
+                "descriptive only"
+            )
+        parts.append(
+            f"the chart is drawn from all {row_count} returned row(s) (charts are not "
+            "display-truncated)"
+        )
+        return {
+            "metric_kind": metric_kind,
+            "grain": grain,
+            "unit": unit,
+            "text": "Chart semantics — " + "; ".join(parts) + ".",
+            "evidence_ids": citations[:3],
+        }
 
     @staticmethod
     def _render_html(report: ReportArtifact) -> str:
@@ -241,16 +488,33 @@ th,td{{border:1px solid #e5e7eb;padding:8px;text-align:left}} th{{background:#f3
                 "<tr>" + "".join(f"<td>{html.escape(str(value))}</td>" for value in row) + "</tr>"
                 for row in content["rows"]
             )
-            notice = (
-                f'<p class="notice">Showing {len(content["rows"])} of {content["total_rows"]} rows.</p>'
-                if content.get("truncated") else ""
-            )
+            notices = []
+            if content.get("truncated"):
+                notices.append(
+                    f'<p class="notice">Showing {len(content["rows"])} of '
+                    f'{content["total_rows"]} rows.</p>'
+                )
+            # A truncated display says nothing about the analysis input, and a
+            # complete display says nothing about it either: report both.
+            if content.get("analysis_complete") is False:
+                notices.append(
+                    '<p class="notice">Analysis completeness: degraded — the numbers were '
+                    "computed over a truncated input, not the complete result set.</p>"
+                )
+            notice = "".join(notices)
             return f"<section><h2>{title}</h2>{notice}<table><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table></section>"
         if section.type == "chart":
-            spec = json.dumps(content["spec"], ensure_ascii=False)
+            # Escape "</" so user-controlled spec values (question titles and
+            # result cells) can never terminate the enclosing <script> tag.
+            spec = json.dumps(content["spec"], ensure_ascii=False).replace("</", "<\\/")
             fallback = ReportGenerator._chart_fallback_svg(content["spec"])
+            semantics = content.get("semantics")
+            semantics_html = (
+                f'<p class="meta">{html.escape(str(semantics))}</p>' if semantics else ""
+            )
             return (
                 f'<section><h2>{title}</h2><p>{html.escape(content["reason"])}</p>'
+                f"{semantics_html}"
                 f'<div id="{section.id}" class="chart"><div class="chart-fallback">'
                 f"{fallback}</div></div><script>vegaEmbed(\"#{section.id}\", {spec})"
                 f'.then(function(){{document.querySelector("#{section.id} .chart-fallback")'

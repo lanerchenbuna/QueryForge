@@ -41,21 +41,80 @@ and `candidate_selection`. Rejection cases use:
 }
 ```
 
-Policy probes are deliberately evaluated through the same read-only AST validator
-used by the platform, rather than relying on an LLM to reproduce unsafe SQL.
+Policy probes are evaluated through the **real governance path**: the same
+`SQLPolicyEngine` used at execution time, with the case's `sql_policy` (or the
+default policy) and the case's physical database schema. Table/column scope,
+LIMIT budgets, join rules, and dangerous-function rules are therefore actually
+measured — not just the static read-only rejections.
 
 ## Fixed Metrics
 
 - `sql_execution_success_rate`: successful workflow executions / query cases.
 - `semantic_correctness_rate`: result-set equivalence against the expected SQL,
-  independent of SQL formatting or an alternative valid query plan.
-- `policy_rejection_precision` and `policy_rejection_recall`: expected dangerous
-  probes vs safe expected SQL probes.
-- `p50_latency_ms` and `p95_latency_ms`: end-to-end final-turn query latency.
+  independent of SQL formatting or an alternative valid query plan. Comparison
+  is column-name aware: when the returned column set matches the expected set
+  but the order differs, rows are reordered before comparing, so a correct
+  answer in a different column order is not mis-scored as wrong.
+- `policy_rejection_precision` / `policy_rejection_recall`, measured over
+  **generated** SQL:
+  - true positive: a probe correctly rejected by the policy engine;
+  - false negative: a probe that slipped through (bypass);
+  - false positive: a legitimate query case whose generated SQL the engine
+    rejected. Precision therefore degrades when the policy is over-strict —
+    it is no longer tautologically 1.0.
+  - Supporting counts (`policy_true_positives`, `policy_false_positives`,
+    `policy_false_negatives`, `policy_probe_errors`) and the governing rule per
+    probe (`policy_rule`, `policy_name`) are included for audits.
+- `p50_latency_ms` / `p95_latency_ms`: final-turn query latency. Follow-up
+  warmup turns are excluded from each case's latency, and the first executed
+  case (which includes provider-client warmup) is excluded from the aggregates.
 - `average_estimated_input_tokens`, `average_estimated_output_tokens`, and
   `average_estimated_cost_usd`.
 - `candidate_selection_uplift`: selected candidate semantic correctness minus the
   first generated candidate's correctness on candidate-enabled cases.
+- `per_domain`: per-domain execution-success and semantic-correctness rates.
+
+The report also exposes `query_count`, `probe_count`, and `unique_case_count`
+so coverage is reported honestly (uniqueness is computed from a fingerprint of
+the original case definition — question + expected SQL/probe — not from the
+generated output).
+
+## Comparison Policy and State Isolation
+
+Result comparison is deterministic and declared:
+
+- Row order is ignored (multiset comparison); duplicate rows are preserved —
+  the comparison never deduplicates with a set.
+- Column order is tolerated when the column name sets match.
+- NULL compares equal to NULL only.
+- Integral floats compare equal to ints; non-integral floats are rounded to 10
+  decimals (float-noise tolerance); non-finite floats compare as
+  `"Infinity"` / `"-Infinity"` / `"NaN"`.
+- `oracle_latency_ms` (time to execute the expected SQL) is recorded per case
+  and reported alongside service latency (`average_service_latency_ms` /
+  `average_oracle_latency_ms`).
+
+Every evaluation run redirects SQL history, orchestration state, and the vector
+knowledge base into an isolated root (`.queryforge/evaluation_assets/isolated/`
+by default), so evaluation never pollutes production retrieval or session
+state; the report's `state_isolation` block documents the resolved paths.
+
+## Exit-Code Gates
+
+```bash
+python scripts/evaluate_sql.py \
+  --cases evaluation/gold/nl2sql_multidomain.jsonl \
+  --min-execution-success 1.0 \
+  --min-semantic-correct 0.8 \
+  --min-policy-recall 1.0
+```
+
+- `--min-execution-success` (default 1.0): fails when query cases run below the
+  threshold. Probe-only runs are exempt (the metric is not measurable there).
+- `--min-semantic-correct` (default 0.0, disabled): fails when semantic
+  correctness falls below the threshold.
+- `--min-policy-recall` (default 0.0, disabled): fails when any probe bypasses
+  the policy engine.
 
 Token and cost values are explicitly heuristic (`character_count / 4`) because the
 provider adapters do not expose normalized billing usage across all configured model

@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from queryforge.workflow.node.base import Node
 from queryforge.core.schemas.models import Context, NodeResult
 from queryforge.domain.semantic import SemanticModelLoader
+
+
+LOGGER = logging.getLogger("queryforge.metrics")
+
+_REFERENCE_PATTERN = re.compile(
+    r'\b([A-Za-z_][A-Za-z0-9_]*)\.(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))'
+)
+
+
+def _extract_references(expression: str) -> list[tuple[str, str]]:
+    return [
+        (match.group(1), match.group(2) or match.group(3))
+        for match in _REFERENCE_PATTERN.finditer(expression)
+    ]
 
 
 class MetricSearchNode(Node):
@@ -16,6 +31,15 @@ class MetricSearchNode(Node):
     def execute(self, context: Context) -> NodeResult:
         if context.semantic_model is None:
             return self.success("Metric search disabled: no semantic model")
+        try:
+            return self._match_metrics(context)
+        finally:
+            # Keep the step-05 linking evidence in sync with the authoritative
+            # resolved metric requirements, on success and failure alike.
+            self._record_link_requirements(context)
+
+    def _match_metrics(self, context: Context) -> NodeResult:
+        assert context.semantic_model is not None
         model = context.semantic_model.model
         context.metric_matches = SemanticModelLoader.match_metrics(
             model, context.task.question
@@ -91,6 +115,80 @@ class MetricSearchNode(Node):
                 else ""
             )
         )
+
+    @staticmethod
+    def _record_link_requirements(context: Context) -> None:
+        """Record which tables/columns the resolved metrics actually require.
+
+        Step 05 evidence must stay verifiable: when a required table is missing
+        from the retrieved schema selection the gap is reported instead of being
+        silently generated against.
+        """
+        evidence = context.task_context.get("schema_retrieval")
+        if not isinstance(evidence, dict) or context.semantic_model is None:
+            return
+        entities = {
+            entity.name: entity
+            for entity in context.semantic_model.model.entities
+        }
+        tables: list[str] = []
+        columns: list[str] = []
+        for match in context.metric_matches:
+            entity = entities.get(match.metric.entity)
+            if entity is None:
+                continue
+            if entity.table not in tables:
+                tables.append(entity.table)
+            for reference in (
+                [match.metric.expression, *match.metric.default_filters]
+                + ([match.metric.time_field] if match.metric.time_field else [])
+            ):
+                for table, column in _extract_references(reference):
+                    reference_text = f"{table}.{column}"
+                    if table == entity.table and reference_text not in columns:
+                        columns.append(reference_text)
+        join_paths: list[dict] = []
+        for path in context.metric_join_paths:
+            for table in path.tables:
+                if table not in tables:
+                    tables.append(table)
+            join_keys: list[str] = []
+            for step in path.steps:
+                for reference_text in (
+                    f"{step.from_table}.{step.from_column}",
+                    f"{step.to_table}.{step.to_column}",
+                ):
+                    if reference_text not in columns:
+                        columns.append(reference_text)
+                    if reference_text not in join_keys:
+                        join_keys.append(reference_text)
+            join_paths.append(
+                {
+                    "name": path.name,
+                    "tables": list(path.tables),
+                    "join_keys": join_keys,
+                    "safe": path.safe,
+                }
+            )
+        loaded = {
+            str(table) for table in (evidence.get("selected_table_names") or [])
+        }
+        missing = [table for table in tables if loaded and table not in loaded]
+        evidence["metric_requirements"] = {
+            "matched": bool(context.metric_matches),
+            "metrics": [match.metric.name for match in context.metric_matches],
+            "tables": tables,
+            "columns": columns,
+            "requested_dimensions": list(context.metric_requested_dimensions),
+            "join_paths": join_paths,
+            "missing_tables": missing,
+        }
+        if missing:
+            degradation = evidence.setdefault("degradation", [])
+            note = "required_metric_tables_missing:" + ",".join(missing)
+            if note not in degradation:
+                degradation.append(note)
+            LOGGER.warning("metric_requirement_gap tables=%s", ",".join(missing))
 
     @classmethod
     def _requested_group_dimensions(cls, context: Context) -> list[str]:

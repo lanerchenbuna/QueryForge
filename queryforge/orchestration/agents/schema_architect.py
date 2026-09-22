@@ -36,6 +36,7 @@ class SchemaArchitectAgent(RoleAgent):
                     "target_grain": [],
                     "fanout_risks": [],
                     "semantic_model": None,
+                    "retrieval_evidence": self._retrieval_evidence(context),
                     "risks": [
                         {
                             "type": "schema_planning_error",
@@ -112,12 +113,52 @@ class SchemaArchitectAgent(RoleAgent):
                 "semantic_model": (
                     context.semantic_model.model.name if context.semantic_model else None
                 ),
+                "retrieval_evidence": self._retrieval_evidence(context),
                 "risks": risks,
                 "assumptions": assumptions,
                 "note": "This plan describes physical choices and does not authorize execution.",
             },
             status=status,
         )
+
+    @staticmethod
+    def _retrieval_evidence(context: Context) -> dict | None:
+        """Step-05 schema-retrieval evidence, when the linking node recorded it."""
+        evidence = context.task_context.get("schema_retrieval")
+        if not isinstance(evidence, dict):
+            return None
+        selected = evidence.get("selected_tables") or []
+        tables = [
+            {
+                "table": item.get("table_name"),
+                "reason": item.get("reason"),
+                "score": item.get("score"),
+                "required": bool(item.get("required")),
+                "kept_columns": item.get("kept_columns"),
+            }
+            for item in selected
+            if isinstance(item, dict)
+        ]
+        omitted_tables = [
+            str(table) for table in (evidence.get("omitted_tables") or [])
+        ]
+        return {
+            "mode": evidence.get("mode"),
+            "semantic_model": evidence.get("semantic_model"),
+            "candidate_tables": evidence.get("candidate_tables"),
+            "selected_count": evidence.get("selected_count"),
+            "tables": tables,
+            "required_tables": list(evidence.get("required_tables") or []),
+            "omitted_tables": omitted_tables,
+            "omitted_table_count": len(omitted_tables),
+            "omitted_column_count": int(evidence.get("omitted_columns_count") or 0),
+            "join_paths": list(evidence.get("join_paths") or []),
+            "metric_matches": list(evidence.get("metric_matches") or []),
+            "metric_requirements": evidence.get("metric_requirements"),
+            "degradation": list(evidence.get("degradation") or []),
+            "vector_kb_status": evidence.get("vector_kb_status"),
+            "budget": evidence.get("budget"),
+        }
 
     def _primary_tables(self, context: Context, schemas: list) -> list[dict]:
         question = context.task.question.lower()

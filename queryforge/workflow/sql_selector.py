@@ -7,10 +7,26 @@ import time
 from typing import Any
 
 from queryforge.core.schemas.models import Context, SQLContext
+from queryforge.domain.semantic import SemanticSQLValidator, normalize_sql_signature
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
 
 
 class SQLSelector:
+    #: Hard ceiling on how many candidates one selection may preview. The
+    #: parallel-candidate node budgets for ``candidate_count`` generated
+    #: candidates plus ONE deterministic QuerySpec candidate appended after
+    #: them, so the ceiling must cover that total. A lower ceiling marked the
+    #: deterministic candidate ``not_previewed`` (score 0.0, excluded from
+    #: ``eligible``) exactly when it competed, so the candidate that can never
+    #: hallucinate a column was the one unable to win. The preview cost stays
+    #: bounded: at most four previews per selection, whatever is passed in.
+    MAX_PREVIEW = 4
+
+    #: A zero-row candidate that still satisfies the governed metric contract is
+    #: not evidence of a wrong query: it gets a neutral component score so a wrong
+    #: non-empty candidate cannot win on row counts alone.
+    EMPTY_RESULT_NEUTRAL_SCORE = 0.5
+
     DEFAULT_WEIGHTS = {
         "semantic_match": 0.25,
         "execution_success": 0.25,
@@ -31,7 +47,7 @@ class SQLSelector:
         weights: dict[str, float] | None = None,
     ) -> None:
         self.database_tool = database_tool
-        self.max_preview = min(max(max_preview, 1), 3)
+        self.max_preview = min(max(max_preview, 1), self.MAX_PREVIEW)
         self.preview_limit = min(max(preview_limit, 1), 100)
         self.timeout_seconds = max(timeout_seconds, 0.001)
         self.weights = {**self.DEFAULT_WEIGHTS, **(weights or {})}
@@ -43,13 +59,41 @@ class SQLSelector:
     ) -> dict[str, Any]:
         started = time.monotonic()
         evaluations: list[dict[str, Any]] = []
+        seen_signatures: dict[str, int] = {}
         for index, candidate in enumerate(candidates):
+            sql = candidate.get("sql")
+            signature = (
+                normalize_sql_signature(sql)
+                if isinstance(sql, str) and sql.strip()
+                else ""
+            )
+            if signature and signature in seen_signatures:
+                # Normalized duplicates never consume preview budget or cost.
+                evaluations.append(
+                    {
+                        "candidate_index": index,
+                        "sql": sql,
+                        "status": "duplicate",
+                        "score": 0.0,
+                        "duplicate_of": seen_signatures[signature],
+                        "semantic_validation": None,
+                        "rejection_reason": (
+                            "Duplicate of candidate "
+                            f"{seen_signatures[signature]} after SQL normalization."
+                        ),
+                    }
+                )
+                continue
+            if signature:
+                seen_signatures.setdefault(signature, index)
             if index >= self.max_preview or time.monotonic() - started >= self.timeout_seconds:
                 evaluations.append(
                     {
                         "candidate_index": index,
+                        "sql": sql,
                         "status": "not_previewed",
                         "score": 0.0,
+                        "duplicate_of": None,
                         "reason": "Preview budget exhausted.",
                     }
                 )
@@ -98,6 +142,8 @@ class SQLSelector:
             "row_count": None,
             "preview_columns": [],
             "rejection_reason": None,
+            "duplicate_of": None,
+            "semantic_validation": None,
         }
         try:
             clean_sql = DatabaseTool.validate_readonly_sql(str(sql))
@@ -107,6 +153,15 @@ class SQLSelector:
             evaluation["policy_rule"] = decision.rule
             if not decision.allowed:
                 evaluation["rejection_reason"] = decision.reason
+                return evaluation
+            # AST security gate and business-semantic gate stay separate: a
+            # governed metric violation rejects the candidate before any preview.
+            validation = self._validate_semantics(clean_sql, context)
+            evaluation["semantic_validation"] = (
+                validation.model_dump() if validation is not None else None
+            )
+            if validation is not None and validation.status == "violation":
+                evaluation["rejection_reason"] = validation.error_message()
                 return evaluation
             preview = self.database_tool.execute_sql_preview(
                 clean_sql,
@@ -121,6 +176,15 @@ class SQLSelector:
                 context,
             )
             non_empty = 1.0 if preview.row_count > 0 else 0.0
+            empty_result_policy = None
+            if (
+                preview.row_count == 0
+                and validation is not None
+                and validation.status == "passed"
+            ):
+                non_empty = self.EMPTY_RESULT_NEUTRAL_SCORE
+                empty_result_policy = "neutral_semantically_valid_empty"
+                evaluation["empty_result_policy"] = empty_result_policy
             row_reasonable = 1.0 if preview.row_count <= self.preview_limit else 0.5
             complexity = self._complexity_score(clean_sql)
             history_similarity = self._history_similarity(clean_sql, context)
@@ -143,16 +207,30 @@ class SQLSelector:
                 }
             )
             evaluation["score"] = round(score, 6)
+            empty_note = (
+                " Empty but semantically valid result scored as neutral."
+                if empty_result_policy
+                else ""
+            )
             evaluation["selection_reason"] = (
-                "Passed AST/governance/preview; "
+                "Passed AST/governance/semantic/preview; "
                 f"semantic={semantic_match:.2f}, non_empty={non_empty:.2f}, "
                 f"complexity={complexity:.2f}, history={history_similarity:.2f}."
+                + empty_note
             )
         except (UnsafeSQLError, ValueError, TypeError) as exc:
             evaluation["rejection_reason"] = str(exc)
         except Exception as exc:
             evaluation["rejection_reason"] = f"Candidate preview failed: {exc}"
         return evaluation
+
+    @staticmethod
+    def _validate_semantics(sql: str, context: Context) -> Any:
+        """Run the AST business-semantic validator when the request is governed."""
+        validator = SemanticSQLValidator.for_context(context)
+        if validator is None:
+            return None
+        return validator.validate(sql)
 
     def _weighted_score(self, components: dict[str, float]) -> float:
         applicable_weights = {

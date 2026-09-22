@@ -57,6 +57,43 @@ class SQLSecurityPolicyTest(unittest.TestCase):
         self.assertTrue(tool.last_policy_decision.allowed)
         self.assertEqual(tool.last_policy_decision.rule, "allow")
 
+    def test_engine_internal_relations_are_never_readable(self) -> None:
+        """The default backend must not read `sqlite_master` through the policy.
+
+        Regression: an unknown table name was silently skipped for non-DuckDB
+        dialects, so `SELECT * FROM sqlite_master` was ALLOWED on SQLite while the
+        DuckDB path refused it — a policy blind spot on the default backend.
+        Engine-internal prefixes are now refused even when the policy carries no
+        schema metadata, and an unknown application table is refused whenever the
+        physical schema is known.
+        """
+        with SQLiteConnector(str(self.database)) as connector:
+            tool = self.tool(connector)
+            for sql in (
+                "SELECT * FROM sqlite_master",
+                "SELECT name FROM sqlite_master WHERE type = 'table'",
+                "SELECT * FROM pragma_table_info('items')",
+            ):
+                with self.assertRaises(UnsafeSQLError) as raised:
+                    tool.execute_sql(sql)
+                self.assertTrue(
+                    isinstance(raised.exception, UnsafeSQLError), str(raised.exception)
+                )
+            # The declared relations still work: the refusal is not a blanket ban.
+            self.assertEqual(
+                tool.execute_sql("SELECT name FROM items ORDER BY name LIMIT 10").rows,
+                [["alpha"]],
+            )
+        self.assertEqual(tool.last_policy_decision.rule, "allow")
+
+    def test_unknown_application_table_is_refused_when_the_schema_is_known(self) -> None:
+        with SQLiteConnector(str(self.database)) as connector:
+            tool = self.tool(connector)
+            # `policy tables` is the discovered schema here; a relation outside it
+            # is refused by the same rule that protects the allowed set.
+            with self.assertRaises(UnsafeSQLError):
+                tool.execute_sql("SELECT payload FROM audit_log LIMIT 10")
+
     def test_table_column_and_star_scope_are_rejected(self) -> None:
         invalid = {
             "SELECT payload FROM audit_log LIMIT 1": "table_scope",

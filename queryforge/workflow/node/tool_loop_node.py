@@ -1,4 +1,13 @@
-"""Bounded, read-only observation loop before SQL generation."""
+"""Bounded, read-only observation loop before SQL generation.
+
+Step 09 keeps the original bounded-loop semantics (whitelist, round cap, wall
+clock, repeat detection) and moves the action dispatch onto
+:class:`~queryforge.orchestration.tools.registry.ToolRegistry`: every dispatched
+action is a registered :class:`~queryforge.orchestration.tools.specs.ToolSpec`,
+so parameters are validated, permission/mode boundaries apply, resources are
+reserved before the call, and both the typed ``ToolCall`` and its
+``ToolObservation`` are recorded on ``context.task_context["tool_calls"]``.
+"""
 
 from __future__ import annotations
 
@@ -10,8 +19,16 @@ from queryforge.workflow.node.base import Node
 from queryforge.infrastructure.models.base import BaseModelProvider, ModelResponseError
 from queryforge.core.schemas.models import Context, NodeResult, SQLContext
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
+from queryforge.orchestration.tools import (
+    BudgetManager,
+    ToolObservation,
+    ToolRegistry,
+    build_default_registry,
+)
 
 
+#: Whitelist of actions the loop may ask for. ``final_answer`` is local logic;
+#: the four observation actions are dispatched to the registry tools below.
 ALLOWED_ACTIONS = {
     "list_tables",
     "describe_table",
@@ -19,6 +36,21 @@ ALLOWED_ACTIONS = {
     "execute_sql_preview",
     "final_answer",
 }
+
+#: Compatibility mapping from the historical action vocabulary onto registry
+#: tools (the loop prompt still speaks the old names).
+ACTION_TOOLS: dict[str, str] = {
+    "list_tables": "list_tables",
+    "describe_table": "describe_table",
+    "preview_distinct_values": "preview_distinct_values",
+    "execute_sql_preview": "execute_sql_preview",
+}
+
+#: Actions handled by this node itself instead of a registered tool.
+LOCAL_ACTIONS = frozenset({"final_answer"})
+
+#: Registry modes; ``plan_only`` refuses execute-class (SQL) tools.
+VALID_MODES = frozenset({"execute", "plan_only"})
 
 
 class ToolLoopNode(Node):
@@ -33,16 +65,26 @@ class ToolLoopNode(Node):
         max_rounds: int = 5,
         timeout_seconds: float = 30,
         preview_limit: int = 20,
+        budget_manager: BudgetManager | None = None,
+        registry: ToolRegistry | None = None,
+        mode: str = "execute",
     ) -> None:
         if max_rounds < 1:
             raise ValueError("tool loop max_rounds must be positive")
         if timeout_seconds <= 0:
             raise ValueError("tool loop timeout_seconds must be positive")
+        if mode not in VALID_MODES:
+            raise ValueError(f"tool loop mode must be one of {sorted(VALID_MODES)}")
         self.llm = llm
         self.database_tool = database_tool
         self.max_rounds = max_rounds
         self.timeout_seconds = timeout_seconds
         self.preview_limit = min(max(preview_limit, 1), 100)
+        self.mode = mode
+        self.budget_manager = budget_manager or BudgetManager()
+        self.registry = registry or build_default_registry(
+            self.database_tool, self.budget_manager
+        )
 
     def execute(self, context: Context) -> NodeResult:
         started = time.monotonic()
@@ -51,6 +93,7 @@ class ToolLoopNode(Node):
         context.tool_loop_exit_reason = "final_answer"
         observations: list[dict[str, Any]] = []
         seen_actions: set[str] = set()
+        tool_calls: list[dict[str, Any]] = context.task_context.setdefault("tool_calls", [])
 
         for round_number in range(1, self.max_rounds + 1):
             elapsed = time.monotonic() - started
@@ -63,15 +106,19 @@ class ToolLoopNode(Node):
                 action = decision.get("action")
                 params = decision.get("params") or {}
                 if action not in ALLOWED_ACTIONS:
-                    observation = {
-                        "error": f"Unknown tool action: {action!r}",
-                        "allowed_actions": sorted(ALLOWED_ACTIONS),
-                    }
+                    observation = self._denied_observation(context, action, params)
+                    tool_calls.append(observation)
                     context.tool_loop_status = "error"
                     context.tool_loop_exit_reason = "invalid_action"
-                    self._record(context, round_number, action, params, observation)
+                    self._record(
+                        context,
+                        round_number,
+                        action,
+                        params,
+                        observation["observation_payload"],
+                    )
                     return self.success("Tool loop stopped on invalid action")
-                if action == "final_answer":
+                if action in LOCAL_ACTIONS:
                     sql = params.get("sql")
                     if sql:
                         clean_sql = DatabaseTool.validate_readonly_sql(sql)
@@ -91,6 +138,14 @@ class ToolLoopNode(Node):
                         params,
                         {"status": "final_answer"},
                     )
+                    tool_calls.append(
+                        {
+                            "tool": action,
+                            "params": dict(params),
+                            "status": "succeeded",
+                            "local": True,
+                        }
+                    )
                     return self.success("Tool loop completed with final answer")
 
                 key = json.dumps(
@@ -108,13 +163,39 @@ class ToolLoopNode(Node):
                         params,
                         {"error": "Repeated action stopped to avoid an unproductive loop."},
                     )
+                    tool_calls.append(
+                        {
+                            "tool": ACTION_TOOLS.get(action, str(action)),
+                            "params": dict(params),
+                            "status": "skipped",
+                            "reason": "repeated_action",
+                        }
+                    )
                     return self.success("Tool loop stopped on repeated action")
                 seen_actions.add(key)
-                observation = self._execute_action(action, params)
-                observations.append(
-                    {"round": round_number, "action": action, "observation": observation}
+                observation = self._execute_action(action, params, context)
+                tool_calls.append(
+                    {
+                        "call": observation.call.to_payload() if observation.call else None,
+                        "observation": observation.to_payload(),
+                    }
                 )
-                self._record(context, round_number, action, params, observation)
+                if not observation.ok:
+                    self._record(
+                        context,
+                        round_number,
+                        action,
+                        params,
+                        observation.observation_payload(),
+                    )
+                    context.tool_loop_status = "error"
+                    context.tool_loop_exit_reason = "tool_error"
+                    return self.success("Tool loop stopped on tool error")
+                payload = observation.observation_payload()
+                observations.append(
+                    {"round": round_number, "action": action, "observation": payload}
+                )
+                self._record(context, round_number, action, params, payload)
             except ModelResponseError as exc:
                 context.tool_loop_status = "error"
                 context.tool_loop_exit_reason = "model_error"
@@ -163,30 +244,57 @@ Observations:
             raise ModelResponseError("Tool loop response must be a JSON object", str(payload))
         return payload
 
-    def _execute_action(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
-        if action == "list_tables":
-            return {"tables": self.database_tool.list_tables()}
-        if action == "describe_table":
-            schema = self.database_tool.describe_table(str(params["table_name"]))
-            return schema.model_dump(mode="json")
+    def _execute_action(
+        self, action: str, params: dict[str, Any], context: Context
+    ) -> ToolObservation:
+        """Dispatch one whitelisted action to its registered tool."""
+
+        tool_name = ACTION_TOOLS.get(action)
+        if tool_name is None:
+            raise UnsafeSQLError(f"Unsupported tool action: {action}")
         if action == "preview_distinct_values":
-            values = self.database_tool.preview_distinct_values(
-                str(params["table_name"]),
-                str(params["column_name"]),
-                int(params.get("limit", self.preview_limit)),
-            )
-            return {"values": values[: self.preview_limit]}
-        if action == "execute_sql_preview":
-            result = self.database_tool.execute_sql_preview(
-                str(params["sql"]),
-                int(params.get("limit", self.preview_limit)),
-            )
-            return {
-                "columns": result.columns,
-                "rows": result.rows[: self.preview_limit],
-                "row_count": min(result.row_count, self.preview_limit),
+            params = {
+                "table_name": params.get("table_name"),
+                "column_name": params.get("column_name"),
+                "limit": self._bounded_limit(params.get("limit")),
             }
-        raise UnsafeSQLError(f"Unsupported tool action: {action}")
+        elif action == "execute_sql_preview":
+            params = {
+                "sql": params.get("sql"),
+                "limit": self._bounded_limit(params.get("limit")),
+            }
+        return self.registry.execute(
+            tool_name,
+            params,
+            context=context,
+            mode=self.mode,
+        )
+
+    def _bounded_limit(self, value: Any) -> int:
+        try:
+            requested = int(value)
+        except (TypeError, ValueError):
+            requested = self.preview_limit
+        return max(1, min(requested, self.preview_limit, 100))
+
+    def _denied_observation(
+        self, context: Context, action: Any, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Record the refused call in the same shape as a registry denial."""
+
+        observation = self.registry.execute(
+            str(action), params, context=context, mode=self.mode
+        )
+        return {
+            "call": observation.call.to_payload() if observation.call else None,
+            "observation": observation.to_payload(),
+            "observation_payload": {
+                "error": f"Unknown tool action: {action!r}",
+                "allowed_actions": sorted(ALLOWED_ACTIONS),
+                "error_category": observation.error_category,
+                "status": observation.status,
+            },
+        }
 
     @staticmethod
     def _record(

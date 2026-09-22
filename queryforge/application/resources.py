@@ -11,9 +11,13 @@ from queryforge.core.config import Config, list_model_definitions
 from queryforge.domain.security import load_sql_policy
 from queryforge.domain.semantic import SemanticModelContext, SemanticModelLoader, SubjectTreeLoader
 from queryforge.domain.skills import SkillRegistry
-from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
+from queryforge.infrastructure.db.adapters import open_database as SQLiteConnector
 from queryforge.infrastructure.storage import SQLHistoryStore
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+from queryforge.interfaces.transport_security import (
+    validate_database_path,
+    validate_report_root,
+)
 from queryforge.orchestration.orchestrator.pipeline_registry import describe_pipelines
 from queryforge.workflow.workflow_runner import WorkflowRunner
 
@@ -85,6 +89,7 @@ class ResourceService:
         root = Path(
             report_output_dir or config.report_output_dir
         ).expanduser().resolve()
+        validate_report_root(config, report_output_dir)
         path = root / f"{run_id}.html"
         if not path.is_file():
             raise ValueError(f"Report does not exist for run_id {run_id!r}")
@@ -220,6 +225,7 @@ class ResourceService:
         sql_policy_path: str | None,
     ) -> Iterator[DatabaseTool]:
         config = self.config_loader()
+        validate_database_path(config, database)
         path = Path(database or config.database_path).expanduser()
         if not path.is_file():
             raise ValueError(f"SQLite database does not exist: {path}")

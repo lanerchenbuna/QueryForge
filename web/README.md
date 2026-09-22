@@ -1,8 +1,9 @@
 # QueryForge Studio
 
-The visual workspace for QueryForge. It brings data onboarding, mandatory
-semantic review, governed natural-language analysis, SQL inspection, trust
-evidence, and run history into one responsive interface.
+The domain-first visual workspace for QueryForge. Users create or select a data
+domain, then onboard that domain's sources, build its mandatory semantic
+contract, run governed analysis, inspect SQL and trust evidence, and audit
+domain-scoped history in one responsive interface.
 
 ## Run locally
 
@@ -13,8 +14,9 @@ npm ci
 npm run dev
 ```
 
-Open <http://localhost:3000>. The Studio starts in demo mode when the Python API
-is unavailable, so the full product tour remains interactive.
+Open <http://localhost:3000>. The bundled Anime Streaming domain remains
+interactive in demo mode when the Python API is unavailable. Newly created
+domains start empty and never inherit sample entities or metrics.
 
 For live answers, start the QueryForge API from the repository root in a second
 terminal:
@@ -28,18 +30,19 @@ If the API uses another address, copy `.env.example` to `.env.local` and change
 
 ## Product areas
 
-- **Overview** — platform metrics, engagement trends, semantic contract health,
-  and recent activity.
-- **Data Sources** — anime dataset inventory plus SQLite, CSV, and Parquet
-  onboarding.
-- **Semantic Studio** — entities, metrics, relationships, join paths, and
-  contract status in one graph-and-editor workspace.
+- **Data Domains** — create, select, and manage isolated business contexts.
+- **Overview** — active-domain readiness, governed metrics, contract health, and
+  recent activity.
+- **Data Sources** — domain-scoped SQLite, CSV, and Parquet onboarding.
+- **Semantic Studio** — a required contract builder for identity, grain,
+  dimensions, measures, metrics, relationships, Join Paths, policy, and quality.
 - **Ask & Analyze** — natural language to governed SQL with progress, results,
   export, and a complete Trust Trace.
-- **Run History** — filterable, persistent history for audit and replay.
+- **Run History** — filterable, domain-scoped history for audit and replay.
 
 Data uploads are intentionally atomic: the upload endpoint refuses publication
-until a semantic contract has been reviewed and validated.
+until a data domain is selected and its semantic contract has been reviewed and
+validated.
 
 ## Quality checks
 
@@ -54,8 +57,9 @@ tests.
 
 The hosted build uses Cloudflare-compatible bindings:
 
-- `DB` (D1) stores source metadata and Studio run history.
-- `UPLOADS` (R2) stores uploaded source files.
+- `DB` (D1) stores data domains, source metadata, and domain-scoped run history.
+- `UPLOADS` (R2) stores files under
+  `domains/{domainId}/sources/{sourceId}/...`.
 
 Database migrations live in `drizzle/`. The bundled anime source data remains in
 the repository-level `sample_data/` directory and is not copied or modified by

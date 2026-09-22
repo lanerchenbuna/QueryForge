@@ -9,7 +9,13 @@ from queryforge.workflow.node.base import Node
 from queryforge.workflow.node.gen_sql_node import GenSqlNode
 from queryforge.infrastructure.models.base import BaseModelProvider, ModelResponseError
 from queryforge.core.schemas.models import Context, FixAttempt, NodeResult, SQLContext
+from queryforge.domain.semantic import normalize_sql_signature
 from queryforge.domain.skills import SkillManager
+from queryforge.workflow.errors import (
+    WorkflowErrorCategory,
+    guidance_for,
+    record_error_category,
+)
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
 
 
@@ -29,8 +35,13 @@ class FixNode(Node):
             return self.failure("No SQL is available to fix")
         original = context.sql_context
         trigger = self._trigger(context)
+        error_category = record_error_category(
+            context, context.last_execution_error or trigger
+        )
         try:
-            payload = self.llm.generate_json(self._build_prompt(context, trigger))
+            payload = self.llm.generate_json(
+                self._build_prompt(context, trigger, error_category)
+            )
             fixed_sql = payload.get("fixed_sql")
             explanation = payload.get("explanation")
             if not isinstance(fixed_sql, str) or not fixed_sql.strip():
@@ -43,6 +54,15 @@ class FixNode(Node):
                 return self.failure(f"Fixed SQL violates read-only policy: {exc}")
             if clean_sql.strip() == original.sql.strip():
                 return self.failure("Fix response repeated the previous SQL unchanged")
+            signature = normalize_sql_signature(clean_sql)
+            previous_attempts = self._previous_signatures(context, original)
+            if signature and signature in previous_attempts:
+                record_error_category(context, "Repeated SQL cycle")
+                return self.failure(
+                    "Fix response repeated a previous SQL attempt "
+                    f"({previous_attempts[signature]}) after normalization; "
+                    "produce a materially different correction."
+                )
             raw_tables = payload.get("tables_used")
             tables_used = (
                 raw_tables
@@ -81,13 +101,34 @@ class FixNode(Node):
             context.execution_result = None
             context.reflection_result = None
         except ModelResponseError as exc:
+            record_error_category(context, exc)
             return self.failure(
                 f"Fix response is not valid JSON: {exc}; "
                 f"raw_output={exc.raw_output[:1000]!r}"
             )
         except Exception as exc:
+            record_error_category(context, exc)
             return self.failure(f"Could not fix SQL: {exc}")
         return self.success(f"Generated fixed SQL for retry {context.retry_count}")
+
+    @staticmethod
+    def _previous_signatures(
+        context: Context, original: SQLContext
+    ) -> dict[str, str]:
+        """Normalized signatures of every SQL already attempted in this run."""
+        attempts: dict[str, str] = {}
+        original_signature = normalize_sql_signature(original.sql)
+        if original_signature:
+            attempts[original_signature] = "the current SQL"
+        for attempt in context.sql_attempt_history:
+            signature = normalize_sql_signature(attempt.sql)
+            if signature:
+                attempts.setdefault(signature, f"attempt {attempt.attempt_number}")
+        for index, fix_attempt in enumerate(context.fix_attempts, start=1):
+            signature = normalize_sql_signature(fix_attempt.fixed_sql)
+            if signature:
+                attempts.setdefault(signature, f"fix attempt {index}")
+        return attempts
 
     @staticmethod
     def _trigger(context: Context) -> str:
@@ -100,7 +141,12 @@ class FixNode(Node):
             return " | ".join(parts)
         return "The previous SQL requires a localized correction."
 
-    def _build_prompt(self, context: Context, trigger: str) -> str:
+    def _build_prompt(
+        self,
+        context: Context,
+        trigger: str,
+        error_category: WorkflowErrorCategory = WorkflowErrorCategory.unknown,
+    ) -> str:
         assert context.sql_context is not None
         schemas = [
             {
@@ -146,6 +192,12 @@ Original explanation:
 
 Execution error or reflection feedback:
 {trigger}
+
+Typed error category (authoritative; drives which repair is legitimate):
+{error_category.value}
+
+Repair guidance for this typed category:
+{guidance_for(error_category)}
 
 Available schema:
 {json.dumps(schemas, ensure_ascii=False, indent=2)}

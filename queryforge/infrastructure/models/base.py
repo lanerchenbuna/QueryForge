@@ -8,6 +8,8 @@ import re
 from abc import ABC, abstractmethod
 from typing import Any
 
+from queryforge.core.observability import ModelUsage, normalize_usage
+
 
 Message = dict[str, str]
 
@@ -27,6 +29,23 @@ class BaseModelProvider(ABC):
 
     provider: str
     model: str
+    #: Normalized usage of the most recent call (``None`` when the provider
+    #: reported nothing). Adapters set this so observability can report measured
+    #: tokens instead of estimating; an unset value must never become a fake 0.
+    last_usage: ModelUsage | None = None
+
+    def record_usage(self, raw_usage: Any) -> ModelUsage | None:
+        """Normalize and store the usage payload of the latest provider response.
+
+        Adapters call this with the raw provider payload (OpenAI ``usage``,
+        Anthropic ``usage``, Gemini ``usage_metadata``, ...). A payload without
+        token counts clears the previous value, so observation marks the call
+        estimated instead of reusing a stale measured number.
+        """
+
+        usage = normalize_usage(raw_usage)
+        self.last_usage = usage
+        return usage
 
     def generate_text(self, prompt: str) -> str:
         return self.generate_with_messages(

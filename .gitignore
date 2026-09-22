@@ -24,3 +24,6 @@ Thumbs.db
 *.sqlite-wal
 *.build.json
 semantic-weekly-report.json
+# Generated benchmark reports (the summarized evidence lives in
+# docs/optimization/step-16-acceptance.md; CI uploads its own artifacts).
+evaluation/reports/

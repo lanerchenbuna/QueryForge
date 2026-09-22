@@ -99,6 +99,42 @@ class DateParserNodeTest(unittest.TestCase):
         self.assertEqual(state.date_context.source, "llm")
         self.assertEqual(state.date_context.ranges[0].start_date, "2024-04-01")
 
+    def test_named_month_wins_over_the_bare_year_rule(self) -> None:
+        """A month+year window must not collapse into a duplicated year window.
+
+        Regression: "December 2024 compared to November 2024" matched the bare-year
+        rule twice and produced the SAME full-2024 range twice, so the compiled SQL
+        carried a duplicated whole-year filter and answered with whole-year totals
+        for a two-month comparison.
+        """
+        question = "Watch hours by device in December 2024 compared to November 2024"
+        ranges = DateParserNode.parse_rules(question, TODAY)
+        self.assertEqual(len(ranges), 2)
+        self.assertEqual(
+            [(item.start_date, item.end_date) for item in ranges],
+            [("2024-12-01", "2024-12-31"), ("2024-11-01", "2024-11-30")],
+        )
+        # Other spellings of "one named month":
+        for text, expected in (
+            ("watch hours in Nov 2024", ("2024-11-01", "2024-11-30")),
+            ("watch hours in 2024-12", ("2024-12-01", "2024-12-31")),
+            ("watch hours in 2024年12月", ("2024-12-01", "2024-12-31")),
+            ("watch hours in February 2023", ("2023-02-01", "2023-02-28")),
+        ):
+            with self.subTest(text=text):
+                resolved = DateParserNode.parse_rules(text, TODAY)
+                self.assertEqual(len(resolved), 1)
+                self.assertEqual(
+                    (resolved[0].start_date, resolved[0].end_date), expected
+                )
+        # A bare year is still a whole year, and a plain question is still empty.
+        year = DateParserNode.parse_rules("watch hours in 2024", TODAY)
+        self.assertEqual(
+            [(item.start_date, item.end_date) for item in year],
+            [("2024-01-01", "2024-12-31")],
+        )
+        self.assertEqual(DateParserNode.parse_rules("how many users", TODAY), [])
+
     def test_gen_sql_prompt_includes_resolved_date_context(self) -> None:
         state = context("Show orders from last 30 days")
         state.relevant_tables = [
