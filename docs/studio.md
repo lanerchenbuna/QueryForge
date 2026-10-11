@@ -14,7 +14,7 @@ make web-install
 make web-dev
 ```
 
-Open <http://localhost:3000>. This optimization targets local single-user use.
+Open <http://localhost:3000>. Studio supports local single-user use.
 Demo results are labelled explicitly; a failed live request cannot become a demo success.
 
 For live execution, start the Python API in another terminal:
@@ -77,8 +77,8 @@ domains clears prior results and is refused while a run is in progress.
 
 Local Studio uses Miniflare's D1/R2-compatible storage for domains, sources and
 history. Set `STUDIO_STATE_DIR` to isolate a test instance. The Python runtime
-owns SQL planning, policy enforcement, read-only execution and reports. This
-phase adds no multi-user identity or cloud deployment authorization scheme.
+owns SQL planning, policy enforcement, read-only execution and reports. The deployment assumes a local
+single user; multi-user hosting is outside the supported deployment model.
 
 Run history retains result snapshots (2 MiB maximum, 30-day access). Replay is
 bound to the saved domain/data version and makes no model call. Legacy history
@@ -104,15 +104,11 @@ For a disposable offline end-to-end fixture, start these in separate terminals:
 
 ```bash
 .venv/bin/python -B -m tests.studio_fixture_server
-STUDIO_STATE_DIR=/tmp/queryforge_phase4_studio QUERYFORGE_API_URL=http://127.0.0.1:8000 npm --prefix web run dev
-.venv/bin/python -B scripts/check_local_studio.py --report /tmp/queryforge_phase4_studio_acceptance.json
+STUDIO_STATE_DIR=/tmp/queryforge-studio-test QUERYFORGE_API_URL=http://127.0.0.1:8000 npm --prefix web run dev
+.venv/bin/python -B scripts/check_local_studio.py --report /tmp/queryforge-studio-acceptance.json
 ```
 
 The checker requires PyArrow for its genuine Parquet fixture and refuses a
 backend without the explicit offline-fixture health marker before any workflow.
 It verifies real Studio HTTP handlers, local D1/R2, Python publication, governed
 SQLite results, refusals, SSE disconnect cancellation, replay and report expiry.
-Native browser query/replay were also verified with CUA. Native file selection
-could not complete because the OS dialog kept Open disabled; the entire browser
-upload click sequence remains a manual acceptance item. See the roadmap for
-frozen results and the distinction between HTTP and browser evidence.

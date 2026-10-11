@@ -1,22 +1,20 @@
-# Database adapter contract (Step 18)
+# Database Adapters
 
-This document freezes the **read-only analytics database adapter contract** and
-records the evidence behind the second backend (DuckDB) and the server-type backend
-(PostgreSQL). The deployment/security view of the same feature is in
-`database-adapters.md`; the plan item is
-the QueryForge database-adapter programme (step 18).
+QueryForge supports SQLite by default and optional DuckDB and PostgreSQL backends.
+All analysis uses read-only connections and the shared DatabaseTool policy boundary.
+This guide describes adapter capabilities, connection requirements and extension points.
 
 Files:
 
 | File | Role |
 | --- | --- |
-| `queryforge/infrastructure/db/adapter.py` | the frozen contract, capability registry, error taxonomy, value/type normalization |
-| `queryforge/infrastructure/db/sqlite_connector.py` | unchanged SQLite default path (pre-contract connector) |
+| `queryforge/infrastructure/db/adapter.py` | adapter contract, capability registry, error taxonomy, value/type normalization |
+| `queryforge/infrastructure/db/sqlite_connector.py` | SQLite default backend |
 | `queryforge/infrastructure/db/duckdb_connector.py` | DuckDB backend implementing the contract (optional driver) |
 | `queryforge/infrastructure/db/postgres_connector.py` | PostgreSQL server backend implementing the contract (optional `psycopg` driver) |
 | `queryforge/infrastructure/db/adapters.py` | factory: SQLite/DuckDB file paths, plus PostgreSQL DSNs and `*.pg` marker files; never imports a driver eagerly |
 | `queryforge/infrastructure/db/__init__.py` | lazy exports: importing the package never imports duckdb |
-| `tests/test_db_adapter_contract.py` | parameterised conformance suite + 18-N1 cross-backend equivalence (SQLite/DuckDB) |
+| `tests/test_db_adapter_contract.py` | SQLite/DuckDB conformance and result-equivalence tests |
 | `tests/test_postgres_adapter_contract.py` | always-run wiring/dialect checks + server-gated PostgreSQL conformance suite |
 
 ## 1. The contract surface
@@ -145,12 +143,11 @@ both spellings to `decimal`. Cross-backend comparisons must use
   that reach it. But the engine role is not a complete boundary on SQLite:
   `mode=ro` protects the main database only, so the engine still accepts
   `ATTACH` of another file (writes *into* an attached database are refused by
-  `PRAGMA query_only`). That is exactly why the AST layer is load-bearing, and it
-  is asserted by `test_18_s1_sqlite_role_boundary_is_documented`.
+  `PRAGMA query_only`). The AST policy is therefore required alongside the engine boundary.
 * **`execute_sql` is a trusted primitive.** A caller that invokes it directly has
   already waived the policy layer; it exists because `DatabaseTool` owns the
   policy check for the existing callers.
-* **No credentials, no vault, no DSN passthrough.** SQLite and DuckDB adapters open
+* **Local-file permissions.** SQLite and DuckDB adapters open
   local files with the OS user's permissions. There is no credential vault and no
   per-domain authorisation in this layer.
 * **The server backend takes a DSN and stores nothing.** `open_postgres(dsn)` /
@@ -174,13 +171,11 @@ both spellings to `decimal`. Cross-backend comparisons must use
   read-only transactions still allow writes to *temporary* tables (the AST policy
   refuses `CREATE` outright, so only the engine layer is relaxed there), and
   `SELECT ... INTO hacked FROM fact_orders` parses as a plain `SELECT` for the AST
-  policy, so on this backend the **engine** is what refuses it
-  (`test_18_s1_ast_policy_misses_select_into_and_the_server_catches_it`). The
-  reverse also holds: `ATTACH` is SQLite syntax, so on the PostgreSQL dialect the
+  policy, so on this backend the **engine** is what refuses it. `ATTACH` is SQLite
+  syntax, so on the PostgreSQL dialect the
   refusal is a typed parse error before the server is contacted.
 * **No pooling.** One adapter owns one connection and is never shared between
-  domains or runs; callers must `close()` it. There is no session reuse, therefore
-  no session-state crossover (18-C1 is out of scope for this step).
+  domains or runs; callers must `close()` it. There is no session reuse between runs.
 * **No cost model.** `explain` returns a plan (access paths), not a calibrated
   cost or wall-time estimate. PostgreSQL's plain `EXPLAIN` does print planner
   `cost=` units, which is why the declaration documents them as plan output rather
@@ -200,7 +195,7 @@ both spellings to `decimal`. Cross-backend comparisons must use
   than `information_schema`, whose constraint views hide rows from a non-owner — a
   read-only role would otherwise appear to have no primary keys at all.
 
-## 5. Adding a third backend
+## 5. Adding a backend
 
 1. Decide whether the engine really fits "read-only analytics database"; if it
    needs credentials, pooling or per-user sessions, extend this contract first.
@@ -220,12 +215,12 @@ both spellings to `decimal`. Cross-backend comparisons must use
    full fetch because the engine LIMIT already bounds the result).
 6. Run the parameterised suite for the new backend: subclass the conformance mixin
    in `tests/test_db_adapter_contract.py`, add its fixture builder (same DDL and
-   the same deterministic data) and extend the 18-N1 equivalence test.
+   the same deterministic data) and extend the cross-backend equivalence test.
 7. A pre-contract connector (like `SQLiteConnector`) can be published unchanged
    through `adapt_connector(connector)`, which adds the contract seam without
    touching the connector's own behaviour.
 
-### Adding a *server* backend (what PostgreSQL needed on top)
+### Server backends
 
 8. Route the target in `adapters.py` **without importing the driver**: a DSN scheme
    and/or a marker-file suffix (see `is_postgres_target`/`resolve_postgres_dsn`), so
@@ -283,68 +278,3 @@ read-only role), `QUERYFORGE_TEST_POSTGRES_SCHEMA` (fixture schema prefix, defau
 superuser exists — the role layer is then explicitly not claimed). Setting
 `QUERYFORGE_REQUIRE_POSTGRES=1` turns a missing DSN into a **failure** instead of a
 skip, so a tier-2 job cannot go green without a server.
-
-**Unverified without a server.** The `psycopg`-side engine half of the PostgreSQL
-conformance suite (18-N1 against SQLite, 18-S1's engine layer, cancellation,
-`explain`, the streaming bound) executes **only** when
-`QUERYFORGE_TEST_POSTGRES_DSN` is set. Without it those cases are skipped with that
-reason in the skip text, which is why this document does not call them verified by
-the default `python -m unittest discover -s tests -q` run. Everything that *can* be
-checked without a server is checked unconditionally instead: the module and factory
-import without the driver, the capability declaration is registered and consistent
-with the frozen vocabulary, DSN/marker routing is asserted, a DSN read from a marker
-file never appears in an error message, the SQLite/DuckDB paths stay driver-free, and
-the postgres dialect's capability/bound behaviour is executed against the real
-declaration.
-
-The suite proves, against real engines:
-
-* **18-N1** the same fixture (360-row fact table + dimension + date column, built
-  from the same DDL and the same deterministic data in both engines) answers the
-  same seven queries identically: `count`, `sum`, `group_by_join`, `window`
-  (`SUM(...) OVER (PARTITION BY ... ORDER BY ...)`), `cte`, `date_range`,
-  `empty` — compared on columns, row count and every row value with no tolerance;
-  plus schema-metadata parity and type-conversion parity.
-* **18-S1** `INSERT`/`UPDATE`/`DELETE`/`DROP`/`CREATE`/`ATTACH`/`PRAGMA` are
-  refused by `AdapterPolicyError` (`decision.rule == "read_only_ast"`) before the
-  engine runs, the engine role independently refuses the writes on both backends,
-  and the fixture is verified unchanged afterwards.
-* **18-R1** the SQLite path (query, schema, preview, explain, policy refusal)
-  keeps working while `duckdb` is made unimportable via monkeypatched
-  `sys.modules`/`find_spec`, the backend fails loudly only when used, and a
-  subprocess asserts that importing `queryforge.infrastructure.db` never imports
-  the driver.
-* capabilities, typed-error parity (`AdapterQueryError` for an unknown table and
-  an unknown column from both backends), `EXPLAIN` plans, and cancellation: a
-  deadline (`AdapterTimeoutError`) and a client `cancel()`
-  (`AdapterCancelledError`) both interrupt a multi-billion-row join in well under
-  a second and leave the connection usable; DuckDB's bounded fetch stops at the
-  limit instead of materializing the whole result.
-
-The PostgreSQL suite (`tests/test_postgres_adapter_contract.py`) runs the same
-conformance mixin against a server and adds:
-
-* **18-N1 across an embedded and a server engine**: the seven portable queries return
-  *identical* normalized rows from SQLite and PostgreSQL, plus logical-schema,
-  primary-key, nullability and type-conversion parity (the last one through the
-  documented `Decimal` comparison, since the two drivers report different Python
-  types for `DECIMAL`).
-* **18-S1 with three layers**: 14 write/admin statements (including
-  `SET default_transaction_read_only = off`, `COPY`, `VACUUM`, `CREATE ROLE`) are
-  refused by `AdapterPolicyError` before the server sees them; the same statements
-  through the trusted `execute_sql` are refused by the server with SQLSTATE `25006`
-  (read-only transaction) or `42501` (insufficient privilege) — SQLSTATE, not message
-  text, so a localized server cannot turn the evidence green; and the
-  `SELECT ... INTO` gap in the AST layer is demonstrated to be closed by the engine.
-* **the boundary is reported**: `SHOW default_transaction_read_only` is read back from
-  the server, the role identity is cross-checked against `current_user`, and
-  `readonly_role_verified` is asserted to mean exactly "this session is not a
-  superuser" (a run using `QUERYFORGE_TEST_POSTGRES_ALLOW_SUPERUSER=1` asserts that the
-  role layer is *not* claimed instead).
-* **the bounded read really streams**: a named server cursor returns 4 of 20 000 000
-  rows well inside the time budget a client-side materialization could not meet, and
-  leaves no cursor allocated (`pg_cursors`), including on a second use of the same
-  fixed cursor name.
-* **the declaration is probed, not asserted**: every declared date function is run on
-  the server, and the always-run half of the module fails if a declaration appears
-  without a probe.

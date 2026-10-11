@@ -36,7 +36,6 @@ Every public transport reaches one of **two** application services:
 only execution kernel: the planner path reaches `DatabaseTool` through
 `ToolRegistry`. Both paths share `DatabaseTool` and the SQLGlot AST policy as their
 execution boundary and their safety invariants; the orchestration above them differs.
-Unifying that upper layer is tracked work, not a current property.
 
 ## Five Stages
 

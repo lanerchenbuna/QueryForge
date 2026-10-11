@@ -1,6 +1,7 @@
 # QueryForge Documentation
 
-Start with whatever matches what you are trying to do.
+Installation and quick-start commands are in the [project README](../README.md#quick-start).
+Use the guides below for your next task.
 
 ## Start Here
 
@@ -19,8 +20,6 @@ Start with whatever matches what you are trying to do.
 
 - [Agent team architecture](agent_team_architecture.md) — entry routing, orchestration, workflow
 - [Database adapters](database_adapters.md) — SQLite default; DuckDB and PostgreSQL optional
-- [Data Agent optimization roadmap](optimization_roadmap.md) — phased tasks, acceptance criteria and verification evidence
-- [Four-stage optimization results](optimization_results.md) — delivered capabilities, measured changes and remaining acceptance
 
 ## Data
 
@@ -29,9 +28,17 @@ Start with whatever matches what you are trying to do.
 
 ## Evaluation
 
-- [NL2SQL evaluation](nl2sql_evaluation.md) — gold sets, metrics, tiers, how to reproduce a run
-- [End-to-end acceptance demos](demo/README.md) — runnable scenarios, no API key required
+- [Evaluation guide](nl2sql_evaluation.md) — offline checks, model benchmarks and result contracts
+- [Runnable examples](demo/README.md) — data publication, analysis and recovery without an API key
 
-## Contributing
+## Development Checks
 
-- [GitHub release checklist](github_release.md)
+Run from the repository root after installing the development dependencies:
+
+```bash
+./init.sh             # environment and offline tests
+make check            # repository hygiene and offline acceptance
+make semantic-check   # sample semantic-model drift
+make web-check        # Studio lint, types, build and tests
+make package          # Python source and wheel distributions
+```
