@@ -130,8 +130,8 @@ class ReportGenerator:
             *self._evidence_sections(store, answer, completeness),
         ]
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = self.output_dir / f"{context.run_id}.html"
-        manifest_path = self.output_dir / f"{context.run_id}.manifest.json"
+        from queryforge.infrastructure.storage.report_store import ReportStore
+        report_path, manifest_path = ReportStore(self.output_dir).paths(context.run_id)
         artifact = ReportArtifact(
             title=context.task.question,
             summary=summary,

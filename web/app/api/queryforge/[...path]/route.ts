@@ -1,4 +1,5 @@
 import { requireStudioUser } from "@/app/studio-auth";
+import { localBackendBase } from "@/app/lib/local-boundary";
 
 const ALLOWED_PATHS = new Set([
   "health",
@@ -37,9 +38,7 @@ function backendUrl(parts: string[]) {
   if (!isAllowedPath(parts)) {
     throw new Error("Unsupported QueryForge API route.");
   }
-  const base = (
-    process.env.QUERYFORGE_API_URL ?? "http://127.0.0.1:8000"
-  ).replace(/\/+$/, "");
+  const base = localBackendBase(process.env.QUERYFORGE_API_URL);
   return `${base}/${path}`;
 }
 
@@ -70,7 +69,9 @@ async function proxy(
       signal: isEventStreamPath(path)
         ? request.signal
         : AbortSignal.any([request.signal, AbortSignal.timeout(120_000)]),
+      redirect: "manual",
     });
+    if (upstream.status >= 300 && upstream.status < 400) throw new Error("Local backend redirects are denied.");
 
     const responseHeaders = new Headers();
     responseHeaders.set(

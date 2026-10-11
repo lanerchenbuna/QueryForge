@@ -89,6 +89,8 @@ ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
             "filters": {"type": "array", "items": {"type": "object"}},
             "time_range": _STRING,
             "time_grain": _STRING,
+            "comparison_baseline": _STRING,
+            "result_role": {"type": "string", "enum": ["metric_value", "metric_totals"]},
             "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
             "sql": _STRING,
             "fallback_sql": _STRING,
@@ -100,17 +102,25 @@ ACTION_PARAM_SCHEMAS: dict[str, dict[str, Any]] = {
         "properties": {
             "require_evidence": _STRING_LIST,
             "require_outputs": _STRING_LIST,
+            "require_request": {"type": "object"},
         },
         "additionalProperties": False,
     },
-    "compare_periods": {"type": "object", "properties": {}, "additionalProperties": False},
+    "compare_periods": {
+        "type": "object", "properties": {
+            "comparison_baseline": _STRING, "time_grain": _STRING,
+            "dataset_kind": {"type": "string", "enum": ["metric_value", "metric_totals"]},
+        }, "additionalProperties": False,
+    },
     "drill_down": {"type": "object", "properties": {}, "additionalProperties": False},
     "calculate_contribution": {
         "type": "object",
         "properties": {},
         "additionalProperties": False,
     },
-    "detect_anomaly": {"type": "object", "properties": {}, "additionalProperties": False},
+    "detect_anomaly": {"type": "object", "properties": {
+        "dataset_kind": {"type": "string", "enum": ["metric_value", "metric_totals"]},
+    }, "additionalProperties": False},
     "render_chart": {"type": "object", "properties": {}, "additionalProperties": False},
 }
 
@@ -250,7 +260,7 @@ class PlanValidator:
                     continue
             tool = ACTION_TOOL_MAP[step.action]
             try:
-                if tool == step.action:
+                if tool == step.action and "dataset_kind" not in step.inputs:
                     # The action's inputs are the registered tool's own contract,
                     # so the registry's validator is used verbatim.
                     registry.validate_params(tool, step.inputs)
@@ -337,7 +347,11 @@ class PlanValidator:
 
         tool = ACTION_TOOL_MAP.get(action)
         if tool is not None and tool == action and registry.has(tool):
-            return registry.resolve(tool).parameter_schema
+            schema = dict(registry.resolve(tool).parameter_schema)
+            if action in {"compare_periods", "detect_anomaly"}:
+                schema["properties"] = {**schema.get("properties", {}),
+                                        "dataset_kind": ACTION_PARAM_SCHEMAS[action]["properties"]["dataset_kind"]}
+            return schema
         return ACTION_PARAM_SCHEMAS.get(action, {"type": "object", "properties": {}})
 
 

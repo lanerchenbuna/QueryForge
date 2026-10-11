@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ class SkillMetadata:
     allowed_nodes: tuple[str, ...]
     enabled: bool
     priority: int
+    selection_keywords: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +53,7 @@ class SkillRegistry:
 
     def __init__(self, skills_dir: str | Path = DEFAULT_SKILLS_DIR) -> None:
         self.skills_dir = Path(skills_dir).expanduser().resolve()
+        self._metadata_cache: dict[tuple[Path, str], SkillMetadata] = {}
 
     def list_skills(self) -> list[SkillDefinition]:
         if not self.skills_dir.exists():
@@ -73,7 +76,18 @@ class SkillRegistry:
                 raise SkillRegistryError(
                     f"Skill {directory.name!r} is missing SKILL.md: {instruction_path}"
                 )
-            metadata = self._read_metadata(metadata_path)
+            try:
+                raw = metadata_path.read_bytes()
+                fingerprint = sha256(raw).hexdigest()
+            except OSError as exc:
+                raise SkillRegistryError(f"Could not read skill metadata {metadata_path}: {exc}") from exc
+            key = (metadata_path, fingerprint)
+            metadata = self._metadata_cache.get(key)
+            if metadata is None:
+                metadata = self._read_metadata(metadata_path, raw)
+                if len(self._metadata_cache) >= 128:
+                    self._metadata_cache.clear()
+                self._metadata_cache[key] = metadata
             if metadata.name != directory.name:
                 raise SkillRegistryError(
                     f"Skill name {metadata.name!r} must match directory {directory.name!r}"
@@ -103,9 +117,9 @@ class SkillRegistry:
         )
 
     @staticmethod
-    def _read_metadata(path: Path) -> SkillMetadata:
+    def _read_metadata(path: Path, raw: bytes | None = None) -> SkillMetadata:
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            payload = yaml.safe_load(raw.decode("utf-8") if raw is not None else path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, yaml.YAMLError) as exc:
             raise SkillRegistryError(f"Could not read skill metadata {path}: {exc}") from exc
         if not isinstance(payload, dict):
@@ -131,12 +145,18 @@ class SkillRegistry:
         priority = payload.get("priority")
         if isinstance(priority, bool) or not isinstance(priority, int):
             raise SkillRegistryError(f"priority must be an integer: {path}")
+        keywords = payload.get("selection_keywords")
+        if keywords is not None and (not isinstance(keywords, list) or not all(
+            isinstance(item, str) and item.strip() for item in keywords
+        )):
+            raise SkillRegistryError(f"selection_keywords must be a string list: {path}")
         return SkillMetadata(
             name=name,
             description=description,
             allowed_nodes=allowed_nodes,
             enabled=enabled,
             priority=priority,
+            selection_keywords=tuple(item.casefold().strip() for item in keywords) if keywords is not None else None,
         )
 
 

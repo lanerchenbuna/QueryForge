@@ -3,3 +3,4 @@ description: Generate safe, readable, deterministic, and efficient analytical SQ
 allowed_nodes: [gen_sql, reflect, fix]
 enabled: true
 priority: 100
+selection_keywords: []

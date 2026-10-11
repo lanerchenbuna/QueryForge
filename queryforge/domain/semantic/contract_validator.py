@@ -14,6 +14,7 @@ from queryforge.domain.semantic.schemas import (
     SemanticEntity,
     SemanticModel,
 )
+from queryforge.domain.semantic.periods import invalid_time_sql, time_contract
 
 
 class ContractCheck(BaseModel):
@@ -108,6 +109,19 @@ class SemanticContractValidator:
                 entity = entity_by_name.get(metric.entity)
                 if entity is None:
                     continue
+                temporal = time_contract(metric)
+                if temporal:
+                    invalid = connection.execute(
+                        f'SELECT COUNT(*) FROM "{entity.table}" WHERE {invalid_time_sql(metric.time_field, temporal)}'
+                    ).fetchone()[0]
+                    report.checks.append(ContractCheck(
+                        scope="metric", subject=metric.name, rule="time_values",
+                        status="failed" if invalid else "passed",
+                        expected={"invalid_dates": 0, "role": temporal.role, "timezone": temporal.timezone,
+                                  "coverage_start": temporal.coverage_start, "complete_through": temporal.complete_through},
+                        observed={"invalid_dates": invalid},
+                        message="Coverage bounds are an authored ingestion guarantee; sparse fact dates do not establish completeness.",
+                    ))
                 cls._validate_rules(
                     connection,
                     report,

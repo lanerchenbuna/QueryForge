@@ -72,6 +72,29 @@ QueryForge discovers automatically. If any asset, relationship, metric, or quali
 contract fails, the entire batch is rolled back: no uploaded rows or watermark
 advance remains without a semantic layer.
 
+## Review Analysis Semantics
+
+For governed multi-fact analysis, declare a fact grain and safe many-to-one paths to
+conformed dimensions. Every metric must allow the requested dimension. The compiler
+aggregates each fact independently before joining key domains, and runtime checks must
+prove target-key uniqueness and other fact grains within the existing quality budget.
+Bounded or unavailable checks are unverified and block that join; an empty dimension
+remains an explicit data-absence result.
+
+Review `analysis.unit`, additivity, the business meaning of `time_field` and its
+`time.role`, UTC/fixed-offset semantics, and fiscal year start. Ratios should declare
+aggregate `ratio.numerator` / `ratio.denominator` instead of duplicating a handwritten
+division expression. Verify that they share the intended filtered population.
+Coverage bounds must come from a reviewed ingestion guarantee; observed min/max dates
+and sparse fact rows cannot establish full coverage. See [analysis contracts](semantic_contracts.md#analysis-contracts)
+for the exact supported shape, authoring gates and limitations.
+
+The bundled sample migrates `watch_hours`, `completion_rate`, `unique_viewers`, and
+`average_rating`; its deterministic generator covers 2023-01-01 through 2025-12-31.
+The two ratio definitions use explicit components. Curated models remain authoritative
+during incremental builds. Review the drift report before updating a baseline; never
+use a baseline update to hide a failing contract.
+
 ## Upload Contract Shape
 
 ```yaml

@@ -19,7 +19,9 @@ workflow layer pass a duck-typed context through
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Literal
+import re
 
 import sqlglot
 from sqlglot import exp
@@ -27,6 +29,8 @@ from sqlglot.optimizer.scope import Scope, traverse_scope
 from pydantic import BaseModel, ConfigDict, Field
 
 from queryforge.domain.semantic.model import SemanticModelLoader
+from queryforge.domain.semantic.query_constraints import bind_filters, literal_predicate, require_filter_predicates
+from queryforge.domain.semantic.periods import bucket_sql, calendar_sql, comparison_context, time_contract, invalid_time_sql
 from queryforge.domain.semantic.schemas import (
     MetricMatch,
     ResolvedJoinPath,
@@ -188,6 +192,8 @@ class _AstIndex:
         self.table_columns = table_columns
         self.scopes: list[Scope] = list(traverse_scope(root))
         self.scope_by_expression = {id(scope.expression): scope for scope in self.scopes}
+        from queryforge.domain.semantic.output_lineage import output_dependencies
+        self.output_nodes = output_dependencies(root, self.scope_by_expression)
         self.cte_names = {
             cte.alias_or_name.casefold()
             for cte in root.find_all(exp.CTE)
@@ -275,7 +281,17 @@ class _AstIndex:
         self, source: Any, column_name: str, depth: int
     ) -> set[tuple[str, str]]:
         if isinstance(source, Scope):
-            return self._resolve_unqualified(source, column_name, depth + 1)
+            if depth > 8 or not isinstance(source.expression, exp.Select):
+                return set()
+            resolved = set()
+            for index, projection in enumerate(source.expression.selects):
+                label = source.outer_columns[index] if source.outer_columns else projection.alias_or_name
+                if projection.is_star:
+                    resolved |= self._resolve_unqualified(source, column_name, depth + 1)
+                elif label.casefold() == column_name.casefold():
+                    for column in projection.find_all(exp.Column):
+                        resolved |= self.resolve_column(source, column, depth + 1)
+            return resolved
         if isinstance(source, exp.Table):
             return {(source.name, column_name)}
         return set()
@@ -286,7 +302,7 @@ class _AstIndex:
         if depth > 8:
             return set()
         resolved: set[tuple[str, str]] = set()
-        for source in scope.sources.values():
+        for _, source in scope.selected_sources.values():
             resolved |= self._resolve_source(source, column_name, depth + 1)
         return resolved
 
@@ -374,6 +390,8 @@ class _AstIndex:
             if not isinstance(expression, (exp.Select, exp.Union)):
                 continue
             for aggregate in expression.find_all(exp.AggFunc):
+                if id(aggregate) not in self.output_nodes:
+                    continue
                 if id(aggregate) in seen:
                     continue
                 seen.add(id(aggregate))
@@ -442,12 +460,24 @@ class SemanticSQLValidator:
         metric_join_paths: list[ResolvedJoinPath] | None = None,
         requested_dimensions: list[str] | None = None,
         date_context: Any | None = None,
+        time_grain: str | None = None,
+        comparison_baseline: str | None = None,
+        user_filters: list[str] | None = None,
+        non_null_columns: set[tuple[str, str]] | None = None,
+        unique_columns: set[tuple[str, str]] | None = None,
+        null_filter_terms: tuple[str, ...] = (),
     ) -> None:
         self.semantic_model = semantic_model
         self.metric_matches = list(metric_matches)
         self.metric_join_paths = list(metric_join_paths or [])
         self.requested_dimensions = list(requested_dimensions or [])
         self.date_context = date_context
+        self.time_grain = time_grain
+        self.comparison_baseline = comparison_baseline
+        self.user_filters = user_filters or []
+        self.non_null_columns = set(non_null_columns or [])
+        self.unique_columns = set(unique_columns or [])
+        self.null_filter_terms = null_filter_terms
         self.model = semantic_model.model
         self.entities_by_name: dict[str, SemanticEntity] = {
             entity.name: entity for entity in self.model.entities
@@ -458,6 +488,19 @@ class SemanticSQLValidator:
         self.table_columns: dict[str, set[str]] = {
             entity.table: self._entity_columns(entity) for entity in self.model.entities
         }
+        # These references have already passed physical authoring validation.
+        # Legacy models need not enumerate expected_columns to declare a measure.
+        for metric in self.model.metrics:
+            for expression in [metric.expression, *metric.default_filters, *([metric.time_field] if metric.time_field else [])]:
+                for column in sqlglot.parse_one(f"SELECT {expression}", read="sqlite").find_all(exp.Column):
+                    if column.table in self.table_columns:
+                        self.table_columns[column.table].add(column.name)
+        for relationship in self.model.relationships:
+            for reference in (relationship.from_ref, relationship.to_ref):
+                entity_name, _, column = reference.partition(".")
+                owner = self.entities_by_name.get(entity_name)
+                if owner:
+                    self.table_columns[owner.table].add(column)
 
     # -------------------------------------------------------------- factories
     @classmethod
@@ -467,14 +510,24 @@ class SemanticSQLValidator:
         metric_matches = list(getattr(context, "metric_matches", None) or [])
         if semantic_model is None or not metric_matches:
             return None
+        from queryforge.domain.semantic.request_contract import null_filter_terms
         return cls(
             semantic_model,
             metric_matches,
+            null_filter_terms=null_filter_terms(getattr(context.task, "question", "")),
             metric_join_paths=list(getattr(context, "metric_join_paths", None) or []),
             requested_dimensions=list(
                 getattr(context, "metric_requested_dimensions", None) or []
             ),
             date_context=getattr(context, "date_context", None),
+            time_grain=getattr(context, "time_grain", None),
+            non_null_columns={(schema.table_name, column.name)
+                              for schema in (getattr(context, "relevant_tables", None) or [])
+                              for column in schema.columns if not column.nullable},
+            unique_columns={(schema.table_name, column.name)
+                            for schema in (getattr(context, "relevant_tables", None) or [])
+                            for column in schema.columns if column.primary_key and not column.nullable
+                            and sum(item.primary_key for item in schema.columns) == 1},
         )
 
     @staticmethod
@@ -535,6 +588,8 @@ class SemanticSQLValidator:
                 evidence=evidence,
             )
         root = statements[0]
+        if isinstance(root, exp.Select) and any(cte.alias.startswith("_qf_metric_") for cte in root.find_all(exp.CTE)):
+            return self._validate_separate_metrics(root, evidence)
 
         unsupported = self._unsupported_shape(root)
         if unsupported is not None:
@@ -556,6 +611,7 @@ class SemanticSQLValidator:
         violations: list[dict[str, str]] = []
         self._check_unknown_schema(index, violations, evidence)
         measure_nodes = self._check_metric_expressions(index, violations, evidence)
+        self._check_requested_null_filters(index, violations)
         self._check_default_filters(index, violations, evidence, measure_nodes)
         self._check_time_filter(index, violations, evidence)
         self._check_join_keys(index, violations, evidence)
@@ -567,6 +623,63 @@ class SemanticSQLValidator:
                 status=VIOLATION, violations=violations, evidence=evidence
             )
         return SemanticValidationResult(status=PASSED, evidence=evidence)
+
+    def _validate_separate_metrics(self, root, evidence):
+        """Prove the aggregate join wrapper and validate every fact scope.
+
+        Set operations remain unsupported elsewhere. Here UNION only creates the
+        key domain; exact AST comparison proves keys, NULL-safe joins, all output
+        measures and the absence of extra/unreferenced scopes. Branches cannot
+        smuggle a row bound or change the governed expression/grouping.
+        """
+        try:
+            limit = int(root.args["limit"].expression.this) if root.args.get("limit") else 0
+            expected = QuerySpecCompiler.compile(
+                semantic_model=self.semantic_model, metric_matches=self.metric_matches,
+                metric_join_paths=self.metric_join_paths, requested_dimensions=self.requested_dimensions,
+                date_context=self.date_context, limit=limit,
+                time_grain=self.time_grain, comparison_baseline=self.comparison_baseline, user_filters=self.user_filters,
+            )
+            if expected is None or len(self.metric_matches) < 2:
+                raise ValueError("independent metric scopes cannot be compiled for the requested grain")
+            oracle = sqlglot.parse_one(expected.sql, read="sqlite")
+            observed_ctes = {cte.alias: cte for cte in root.find_all(exp.CTE)}
+            expected_ctes = {cte.alias: cte for cte in oracle.find_all(exp.CTE)}
+            names = expected.evidence["metric_ctes"]
+            if set(observed_ctes) != set(expected_ctes):
+                raise ValueError("unexpected or missing aggregate/key scope")
+            observed_wrapper, expected_wrapper = root.copy(), oracle.copy()
+            for wrapper in (observed_wrapper, expected_wrapper):
+                for cte in wrapper.find_all(exp.CTE):
+                    if cte.alias in names:
+                        cte.set("this", sqlglot.parse_one("SELECT 0"))
+            if observed_wrapper != expected_wrapper:
+                raise ValueError("aggregate wrapper does not preserve one row per requested key and every measure")
+            for name, match in zip(names, self.metric_matches):
+                branch, branch_oracle = observed_ctes[name].this, expected_ctes[name].this
+                if (branch.expressions != branch_oracle.expressions or branch.args.get("group") != branch_oracle.args.get("group")
+                        or branch.args.get("from_") != branch_oracle.args.get("from_")
+                        or branch.args.get("joins") != branch_oracle.args.get("joins")
+                        or branch.args.get("where") != branch_oracle.args.get("where")
+                        or branch.args.get("limit") or branch.args.get("distinct") or branch.args.get("having")):
+                    raise ValueError(f"{name}: changed measure, grouping, or incomplete aggregate population")
+                require_filter_predicates(branch.sql(dialect="sqlite"), match.metric.default_filters)
+                require_filter_predicates(branch.sql(dialect="sqlite"), expected.user_filters)
+                validator = SemanticSQLValidator(
+                    # The full FROM/JOIN/GROUP/projection AST was proven against
+                    # the safe compiler above, including metric-specific time
+                    # roles. Validate the remaining expression/filter/schema
+                    # obligations at the branch's own metric and date scope.
+                    self.semantic_model, [match], date_context=comparison_context(
+                        self.date_context, self.comparison_baseline, self.time_grain, time_contract(match.metric)),
+                )
+                result = validator.validate(branch.sql(dialect="sqlite"))
+                if result.status != PASSED:
+                    return result
+                evidence.setdefault("metric_scopes", {})[match.metric.name] = result.evidence
+            return SemanticValidationResult(status=PASSED, evidence=evidence)
+        except Exception as exc:
+            return SemanticValidationResult(status=UNSUPPORTED, unsupported_reason=f"unverified aggregate join: {exc}", evidence=evidence)
 
     # ------------------------------------------------------------ unsupported
     def _unsupported_shape(self, root: exp.Expression) -> str | None:
@@ -660,7 +773,7 @@ class SemanticSQLValidator:
         for aggregate in expression.find_all(exp.AggFunc):
             argument = aggregate.this
             if isinstance(argument, exp.Distinct):
-                argument = argument.this
+                argument = argument.expressions[0] if len(argument.expressions) == 1 else None
             if isinstance(argument, exp.Star):
                 requirements.append(
                     _MetricAggregateRequirement(
@@ -705,7 +818,7 @@ class SemanticSQLValidator:
             if requirement.star:
                 return observed.star or bool(observed.columns)
             if requirement.column is None:
-                return True
+                return False
             return requirement.column in observed.columns
         if observed.function != requirement.function:
             return False
@@ -734,7 +847,7 @@ class SemanticSQLValidator:
     ) -> list[exp.Expression]:
         observed = index.aggregates()
         measure_nodes: list[exp.Expression] = []
-        sql_has_division = next(index.root.find_all(exp.Div), None) is not None
+        sql_has_division = any(id(node) in index.output_nodes for node in index.root.find_all(exp.Div))
 
         for match in self.metric_matches:
             metric = match.metric
@@ -745,11 +858,22 @@ class SemanticSQLValidator:
             requirements, columns, has_division = self._metric_requirements(
                 metric, base_table
             )
+            star_proofs = {
+                requirement.column: node
+                for requirement in requirements
+                if requirement.function == "COUNT" and requirement.distinct
+                and requirement.column in self.unique_columns
+                for node, aggregate in observed
+                if aggregate.function == "COUNT" and aggregate.star and not aggregate.distinct
+                and self._single_physical_source(index, node) == {base_table}
+            }
             missing_columns = sorted(
                 f"{table}.{column}"
                 for table, column in columns
+                if (table, column) not in star_proofs
                 if not any(
-                    (table, column) in resolved for _, _, resolved in index.column_facts
+                    (table, column) in resolved and id(node) in index.output_nodes
+                    for _, node, resolved in index.column_facts
                 )
             )
             if missing_columns:
@@ -778,6 +902,13 @@ class SemanticSQLValidator:
                 if requirement.function == "SUM" and requirement.column is not None
                 for _node, aggregate in observed
             )
+            if metric.ratio:
+                proof = self._declared_ratio_proof(index, metric)
+                avg_equivalence = proof == "average"
+                if proof is None:
+                    self._add_violation(violations, RULE_METRIC_EXPRESSION,
+                        f"metric {metric.name!r} declared ratio numerator, denominator, scale and numeric division cannot be verified")
+                evidence.setdefault("ratio_components", {})[metric.name] = proof or "unverified"
             matched_any = True
             for requirement in requirements:
                 matched = [
@@ -785,6 +916,9 @@ class SemanticSQLValidator:
                     for node, aggregate in observed
                     if self._aggregate_satisfies(requirement, aggregate)
                 ]
+                if not matched and requirement.column in star_proofs:
+                    node = star_proofs[requirement.column]
+                    matched = [(node, next(aggregate for item, aggregate in observed if item is node))]
                 if not matched and avg_equivalence:
                     # SUM(column)/COUNT(*) ratio metrics accept the equivalent AVG(column).
                     continue
@@ -817,6 +951,103 @@ class SemanticSQLValidator:
                 }
             )
         return measure_nodes
+
+    def _check_requested_null_filters(self, index, violations):
+        def conjuncts(node):
+            if isinstance(node, exp.Paren):
+                return conjuncts(node.this)
+            if isinstance(node, exp.And):
+                return conjuncts(node.this) + conjuncts(node.expression)
+            return [node]
+
+        for term in self.null_filter_terms:
+            for match in self.metric_matches:
+                entity = self.entities_by_name[match.metric.entity]
+                names = [name for name in self.table_columns[entity.table]
+                         if name.casefold() == term.casefold() or name.casefold().endswith("_" + term.casefold())]
+                lineage = index.scope_lineage(self._metric_scope(index, match.metric, entity.table))
+                proved = len(names) == 1 and any(
+                    isinstance(predicate, exp.Is) and isinstance(predicate.expression, exp.Null)
+                    and isinstance(predicate.this, exp.Column)
+                    and index.resolve_column(scope, predicate.this) == {(entity.table, names[0])}
+                    for scope, kind, expression in index.predicates if kind == "where" and id(scope) in lineage
+                    for predicate in conjuncts(expression))
+                if not proved:
+                    self._add_violation(violations, RULE_METRIC_EXPRESSION,
+                                        f"requested NULL {term} filter cannot be verified for metric {match.metric.name!r}")
+
+    @staticmethod
+    def _single_physical_source(index, node):
+        scope = index.scope_of(node)
+        if scope is None:
+            return set()
+        sources = [source for _, source in scope.selected_sources.values()]
+        # A derived source could duplicate rows or remove uniqueness.
+        if len(sources) != 1 or any(not isinstance(source, exp.Table) for source in sources):
+            return set()
+        return {source.name for source in sources}
+
+    @classmethod
+    def _ratio_signature(cls, value, index=None, scope=None):
+        """Exact math, permitting aliases, parentheses and neutral multiplication.
+
+        Decimal compares numeric literals without rounding large integer factors.
+        Derived aggregate columns cannot be mistaken for raw measure columns.
+        """
+        if isinstance(value, (exp.Alias, exp.Paren)):
+            return cls._ratio_signature(value.this, index, scope)
+        if isinstance(value, exp.Column):
+            if scope is not None:
+                sources = [scope.sources.get(value.table)] if value.table else list(scope.sources.values())
+                if any(isinstance(source, Scope) for source in sources):
+                    return ("unverified_derived_column", value.sql())
+                resolved = index.resolve_column(scope, value)
+                if len(resolved) == 1:
+                    return ("column", *next(iter(resolved)))
+                return ("unresolved_column", value.sql())
+            return ("column", value.table, value.name)
+        if isinstance(value, exp.Literal):
+            return ("literal", value.is_string, value.this if value.is_string else Decimal(value.this))
+        if isinstance(value, exp.Mul):
+            for literal, other in ((value.this, value.expression), (value.expression, value.this)):
+                if isinstance(literal, exp.Literal) and not literal.is_string and Decimal(literal.this) == 1:
+                    return cls._ratio_signature(other, index, scope)
+        if isinstance(value, exp.Expression):
+            return (value.key, tuple((key, cls._ratio_signature(item, index, scope)) for key, item in sorted(value.args.items()) if item is not None))
+        if isinstance(value, list):
+            return tuple(cls._ratio_signature(item, index, scope) for item in value)
+        return value
+
+    def _declared_ratio_proof(self, index, metric):
+        expected = {"direct": self._ratio_signature(_parse_expression(metric.expression))}
+        numerator = _parse_expression(metric.ratio.numerator)
+        denominator = _parse_expression(metric.ratio.denominator)
+        if isinstance(numerator, exp.Sum) and isinstance(numerator.this, exp.Column) and isinstance(denominator, exp.Count):
+            column = numerator.this
+            same_population = (isinstance(denominator.this, exp.Column) and denominator.this == column) or (
+                isinstance(denominator.this, exp.Star) and (column.table, column.name) in self.non_null_columns)
+            if same_population:
+                expected["average"] = self._ratio_signature(_parse_expression(
+                    f"AVG({column.sql(dialect='sqlite')}) * {metric.ratio.scale}"))
+        for projection in index.root.walk():
+            if id(projection) not in index.output_nodes:
+                continue
+            scope = index.scope_of(projection)
+            while isinstance(projection, (exp.Alias, exp.Paren)):
+                projection = projection.this
+            # Reporting precision may round the final value, never its inputs.
+            if isinstance(projection, exp.Round):
+                decimals = projection.args.get("decimals")
+                if decimals is None or (
+                    isinstance(decimals, exp.Literal) and decimals.is_int
+                    and 0 <= int(decimals.this) <= 15
+                ):
+                    projection = projection.this
+            signature = self._ratio_signature(projection, index, scope)
+            for proof, reference in expected.items():
+                if signature == reference:
+                    return proof
+        return None
 
     def _default_filter_expectations(
         self, raw_filter: str, base_table: str
@@ -969,6 +1200,8 @@ class SemanticSQLValidator:
         }
         for node, aggregate in index.aggregates():
             if wanted and (wanted & set(aggregate.columns)):
+                return index.scope_of(node)
+            if aggregate.function == "COUNT" and aggregate.star and self._single_physical_source(index, node) == {base_table}:
                 return index.scope_of(node)
         return index.scopes[-1] if index.scopes else None
 
@@ -1335,11 +1568,14 @@ class SemanticSQLValidator:
         violations: list[dict[str, str]],
         evidence: dict[str, Any],
     ) -> None:
-        used_tables = set(index.referenced_tables)
         for match in self.metric_matches:
             base_entity = self.entities_by_name.get(match.metric.entity)
             if base_entity is None:
                 continue
+            metric_scope = self._metric_scope(index, match.metric, base_entity.table)
+            lineage = index.scope_lineage(metric_scope)
+            used_tables = {source.name for scope in index.scopes if id(scope) in lineage
+                           for _, source in scope.selected_sources.values() if isinstance(source, exp.Table)}
             governed_tables = {base_entity.table} | {
                 table
                 for path in self.metric_join_paths
@@ -1372,9 +1608,15 @@ class SemanticSQLValidator:
         violations: list[dict[str, str]],
         evidence: dict[str, Any],
     ) -> None:
+        active_lineage = set().union(*(
+            index.scope_lineage(self._metric_scope(index, match.metric,
+                self.entities_by_name[match.metric.entity].table))
+            for match in self.metric_matches
+        )) if self.metric_matches else set()
         grouped = {
             resolved
             for scope, column in index.group_by_columns
+            if id(scope) in active_lineage
             for resolved in index.resolve_column(scope, column)
         }
         evidence["group_by"] = sorted(f"{table}.{column}" for table, column in grouped)
@@ -1407,11 +1649,14 @@ class SemanticSQLValidator:
 
 
 class QuerySpec(BaseModel):
-    """Deterministic compiled query for one matched governed metric."""
+    """Deterministic compiled query over a compatible governed population."""
 
     model_config = ConfigDict(extra="forbid")
 
     metric_name: str
+    metric_names: list[str] = Field(default_factory=list)
+    user_filters: list[str] = Field(default_factory=list)
+    time_grain: str | None = None
     aggregation: Literal["count", "sum", "ratio"]
     base_table: str
     measure_expression: str
@@ -1475,6 +1720,9 @@ class QuerySpecCompiler:
         requested_dimensions: list[str] | None = None,
         date_context: Any | None = None,
         limit: int = 100,
+        user_filters: list[str] | None = None,
+        time_grain: str | None = None,
+        comparison_baseline: str | None = None,
     ) -> QuerySpec | None:
         if not metric_matches:
             return None
@@ -1482,6 +1730,12 @@ class QuerySpecCompiler:
         entities_by_name = {entity.name: entity for entity in model.entities}
         first = metric_matches[0]
         metric = first.metric
+        metrics = [match.metric for match in metric_matches]
+        if len(metrics) > 1:
+            return cls._compile_separate_metrics(
+                semantic_model, metric_matches, metric_join_paths or [], requested_dimensions or [],
+                date_context, limit, user_filters or [], time_grain, comparison_baseline,
+            )
         entity = entities_by_name.get(metric.entity)
         if entity is None:
             return None
@@ -1490,10 +1744,30 @@ class QuerySpecCompiler:
         joins: list[str] = []
         seen_join_tables: set[str] = set()
         group_by: list[str] = []
+        group_projections: list[str] = []
         #: Chronological ordering for period-name dimensions (month_name, ...), so a
         #: time series is never ordered alphabetically.
         order_by: list[str] = []
-        for reference in requested_dimensions or []:
+        bucketed_time = False
+        time_dimension = None
+        bound_filters = bind_filters(model, metrics, user_filters or [])
+        filter_dimensions = []
+        for predicate in bound_filters:
+            for column in literal_predicate(predicate).find_all(exp.Column):
+                if column.table != base_table:
+                    owner = next((e for e in model.entities if e.table == column.table), None)
+                    if owner:
+                        dimension = next((d for d in owner.dimensions if d.column == column.name), None)
+                        if dimension:
+                            filter_dimensions.append(f"{owner.name}.{dimension.name}")
+        join_keys = []
+        contract = time_contract(metric)
+        for reference in dict.fromkeys([*(requested_dimensions or []), *filter_dimensions]):
+            if (time_grain and metric.analysis and metric.analysis.additivity == "semi_additive"
+                    and reference in metric.analysis.non_additive_dimensions):
+                return None
+            if metric.allowed_dimensions and reference not in metric.allowed_dimensions:
+                return None
             entity_name, separator, dimension_name = reference.partition(".")
             dimension_entity = entities_by_name.get(entity_name)
             if not separator or dimension_entity is None:
@@ -1508,21 +1782,37 @@ class QuerySpecCompiler:
             )
             if dimension is None:
                 return None
-            group_by.append(f"{dimension_entity.table}.{dimension.column}")
+            dimension_path = cls._resolve_path(semantic_model, metric.entity, entity_name, metric_join_paths or [])
+            direct = cls._direct_time_join(
+                semantic_model, base_table=base_table, metric_time_field=metric.time_field,
+                dimension_entity=dimension_entity, join_paths=[dimension_path] if dimension_path else [],
+            ) if dimension_entity.table != base_table else None
+            grouping = f"{dimension_entity.table}.{dimension.column}"
+            is_time = grouping == metric.time_field or (
+                direct is not None and dimension.name in {"date", "month", "quarter", "year"}
+            )
+            if time_grain and is_time:
+                grouping = bucket_sql(metric.time_field, time_grain, contract)
+                if grouping is None:
+                    return None
+                bucketed_time = True
+                if reference in (requested_dimensions or []):
+                    time_dimension = reference
+            if reference in (requested_dimensions or []):
+                group_by.append(grouping)
+                group_projections.append(f"{grouping} AS {cls._alias(reference)}"
+                                         if time_grain and is_time else grouping)
             ordering = cls._natural_order_column(dimension_entity, dimension)
-            if ordering is not None:
-                order_by.append(f"{dimension_entity.table}.{ordering}")
+            if reference in (requested_dimensions or []):
+                order_by.append(f"{dimension_entity.table}.{ordering}" if ordering and not (time_grain and is_time)
+                                else grouping)
             if dimension_entity.table == base_table:
                 continue
-            direct = cls._direct_time_join(
-                semantic_model,
-                base_table=base_table,
-                metric_time_field=metric.time_field,
-                dimension_entity=dimension_entity,
-                join_paths=metric_join_paths or [],
-            )
             if direct is not None:
-                joins.append(direct)
+                if dimension_entity.table not in seen_join_tables:
+                    joins.append(direct)
+                    seen_join_tables.add(dimension_entity.table)
+                    join_keys.append((dimension_entity.table, direct.rsplit(".", 1)[-1]))
                 if dimension_entity.table not in used_tables:
                     used_tables.append(dimension_entity.table)
                 continue
@@ -1539,6 +1829,7 @@ class QuerySpecCompiler:
                 if step.to_table in {base_table, *seen_join_tables}:
                     continue
                 seen_join_tables.add(step.to_table)
+                join_keys.append((step.to_table, step.to_column))
                 joins.append(
                     f"JOIN {step.to_table} ON {step.from_table}.{step.from_column} = "
                     f"{step.to_table}.{step.to_column}"
@@ -1546,16 +1837,22 @@ class QuerySpecCompiler:
                 if step.to_table not in used_tables:
                     used_tables.append(step.to_table)
 
+        if time_grain and not bucketed_time:
+            return None
         time_field = metric.time_field
-        time_filter = cls._time_filter(time_field, date_context)
-        where_clauses = [*metric.default_filters]
+        expanded_dates = comparison_context(date_context, comparison_baseline, time_grain, contract)
+        time_filter = cls._time_filter(time_field, expanded_dates, contract)
+        where_clauses = [*metric.default_filters, *bound_filters]
         if time_filter:
             where_clauses.append(time_filter)
-        alias = cls._alias(metric.name)
         statement = f"SELECT "
         if group_by:
-            statement += ", ".join(group_by) + ", "
-        statement += f"{metric.expression} AS {alias} FROM {base_table}"
+            statement += ", ".join(group_projections) + ", "
+        statement += ", ".join(f"{m.expression} AS {cls._alias(m.name)}" for m in metrics)
+        if metric.ratio:
+            statement += (f", {metric.ratio.numerator} AS {cls._alias(metric.name + '__numerator')}"
+                          f", {metric.ratio.denominator} AS {cls._alias(metric.name + '__denominator')}")
+        statement += f" FROM {base_table}"
         if joins:
             statement += " " + " ".join(joins)
         if where_clauses:
@@ -1570,6 +1867,9 @@ class QuerySpecCompiler:
             statement += f" LIMIT {int(limit)}"
         return QuerySpec(
             metric_name=metric.name,
+            metric_names=[m.name for m in metrics],
+            user_filters=bound_filters,
+            time_grain=time_grain,
             aggregation=metric.aggregation,
             base_table=base_table,
             measure_expression=metric.expression,
@@ -1588,6 +1888,10 @@ class QuerySpecCompiler:
             tables_used=used_tables,
             evidence={
                 "metric": metric.name,
+                "metrics": [m.name for m in metrics],
+                "user_filters": bound_filters,
+                "time_grain": time_grain,
+                "time_dimension": time_dimension,
                 "aggregation": metric.aggregation,
                 "default_filters": list(metric.default_filters),
                 "time_field": time_field,
@@ -1596,8 +1900,93 @@ class QuerySpecCompiler:
                 "order_by": order_by or list(group_by),
                 "joins": joins,
                 "limit": int(limit),
+                "join_keys": join_keys,
+                "source_grains": [(base_table, entity.effective_grain)] if entity.effective_grain else [],
+                "time_validations": ([f"SELECT COUNT(*) AS invalid_dates FROM {base_table} WHERE {invalid_time_sql(metric.time_field, contract)} LIMIT 1"] if contract else []),
+                "metric_contracts": {metric.name: cls._analysis_metadata(metric, entity)},
+                "ratio_components": ({metric.name: metric.ratio.model_dump()} if metric.ratio else {}),
+                "requested_ranges": [(r.start_date, r.end_date) for r in (date_context.ranges if date_context else [])],
+                "query_ranges": [(r.start_date, r.end_date) for r in (expanded_dates.ranges if expanded_dates else [])],
             },
         )
+
+    @staticmethod
+    def _analysis_metadata(metric, entity=None):
+        inferred = "non_additive" if metric.aggregation == "ratio" or re.search(r"\bDISTINCT\b", metric.expression, re.I) else "additive"
+        proof = None
+        if not metric.analysis and entity and entity.primary_key == entity.effective_grain and len(entity.primary_key) == 1:
+            measure = sqlglot.parse_one(metric.expression, read="sqlite")
+            if isinstance(measure, exp.Count) and isinstance(measure.this, exp.Distinct) and len(measure.this.expressions) == 1:
+                column = measure.this.expressions[0]
+                if isinstance(column, exp.Column) and (column.table, column.name) == (entity.table, entity.primary_key[0]):
+                    inferred, proof = "additive", "unique_row_identity"
+        return {"unit": metric.analysis.unit if metric.analysis else None,
+                "additivity": metric.analysis.additivity if metric.analysis else inferred,
+                "additivity_proof": proof,
+                "non_additive_dimensions": metric.analysis.non_additive_dimensions if metric.analysis else [],
+                "time": time_contract(metric).model_dump() if time_contract(metric) else None,
+                "population_filters": list(metric.default_filters)}
+
+    @classmethod
+    def _compile_separate_metrics(cls, context, matches, paths, dimensions, dates, limit, filters, grain, baseline):
+        """Union the aggregate key domain, then join one row per grain/key.
+
+        Facts never join to facts. NULL groups and groups present in only one
+        population survive; missing measures stay NULL rather than invented zero.
+        """
+        bound = bind_filters(context.model, [match.metric for match in matches], filters)
+        specs = [cls.compile(semantic_model=context, metric_matches=[match], metric_join_paths=paths,
+                             requested_dimensions=dimensions, date_context=dates, limit=0,
+                             user_filters=bound, time_grain=grain, comparison_baseline=baseline)
+                 for match in matches]
+        if any(spec is None for spec in specs):
+            return None
+        keys = [f"_qf_g{i}" for i in range(len(dimensions))] or ["_qf_scalar"]
+        names = [f"_qf_metric_{i}" for i in range(len(specs))]
+        ctes, key_queries, selects, joins = [], [], [], []
+        for name, spec in zip(names, specs):
+            tree = sqlglot.parse_one(spec.sql, read="sqlite")
+            projections = list(tree.expressions)
+            if dimensions:
+                projections[:len(dimensions)] = [exp.alias_(projection, key) for projection, key in zip(projections, keys)]
+            else:
+                projections.insert(0, exp.alias_(exp.Literal.number(1), keys[0]))
+            tree.set("expressions", projections)
+            tree.set("order", None)
+            ctes.append(f"{name} AS ({tree.sql(dialect='sqlite')})")
+            key_queries.append(f"SELECT {', '.join(keys)} FROM {name}")
+            selects.append(f"{name}.{cls._alias(spec.metric_name)} AS {cls._alias(spec.metric_name)}")
+            metric = next(match.metric for match in matches if match.metric.name == spec.metric_name)
+            if metric.ratio:
+                selects.extend(f"{name}.{cls._alias(metric.name + suffix)} AS {cls._alias(metric.name + suffix)}"
+                               for suffix in ("__numerator", "__denominator"))
+            joins.append(f"LEFT JOIN {name} ON " + " AND ".join(f"_qf_keys.{key} IS {name}.{key}" for key in keys))
+        ctes.append("_qf_keys AS (" + " UNION ".join(key_queries) + ")")
+        group_selects = [f"_qf_keys.{key} AS {cls._alias(reference)}" for key, reference in zip(keys, dimensions)]
+        sql = ("WITH " + ", ".join(ctes) + " SELECT " + ", ".join(group_selects + selects)
+               + " FROM _qf_keys " + " ".join(joins))
+        if dimensions:
+            sql += " ORDER BY " + ", ".join(f"_qf_keys.{key}" for key in keys)
+        if limit > 0:
+            sql += f" LIMIT {int(limit)}"
+        return specs[0].model_copy(update={
+            "metric_names": [match.metric.name for match in matches], "user_filters": bound,
+            "limit": limit, "sql": sql,
+            "tables_used": list(dict.fromkeys(table for spec in specs for table in spec.tables_used)),
+            "explanation": "Independently aggregate each governed population, then join at the requested grain.",
+            "evidence": {"metric_ctes": names, "join_keys": list(dict.fromkeys(tuple(key) for spec in specs for key in spec.evidence["join_keys"])),
+                         "time_validations": list(dict.fromkeys(sql for spec in specs for sql in spec.evidence["time_validations"])),
+                         "source_grains": [(spec.base_table, spec.evidence["source_grains"][0][1]) for spec in specs if spec.evidence["source_grains"]],
+                         "metric_contracts": {name: metadata for spec in specs for name, metadata in spec.evidence["metric_contracts"].items()},
+                         "ratio_components": {match.metric.name: match.metric.ratio.model_dump() for match in matches if match.metric.ratio},
+                         "requested_ranges": specs[0].evidence["requested_ranges"], "query_ranges": specs[0].evidence["query_ranges"],
+                         "time_dimension": specs[0].evidence.get("time_dimension"),
+                         "metric_queries": {spec.metric_name: spec.sql for spec in specs}},
+        })
+
+    @staticmethod
+    def _time_bucket(reference: str, grain: str) -> str | None:
+        return bucket_sql(reference, grain)
 
     @staticmethod
     def _natural_order_column(dimension_entity: Any, dimension: Any) -> str | None:
@@ -1745,7 +2134,7 @@ class QuerySpecCompiler:
         return path
 
     @staticmethod
-    def _time_filter(time_field: str | None, date_context: Any | None) -> str | None:
+    def _time_filter(time_field: str | None, date_context: Any | None, contract=None) -> str | None:
         if not time_field:
             return None
         ranges = [
@@ -1753,11 +2142,13 @@ class QuerySpecCompiler:
             for item in (getattr(date_context, "ranges", None) or [])
         ]
         clauses: list[str] = []
+        date_key = time_field.casefold().endswith("_key")
+        field = time_field if date_key else calendar_sql(time_field, contract)
         for start, end in ranges:
             if not isinstance(start, str) or not isinstance(end, str):
                 continue
             clauses.append(
-                f"{time_field} BETWEEN {QuerySpecCompiler._time_literal(time_field, start)}"
+                f"{field} BETWEEN {QuerySpecCompiler._time_literal(time_field, start)}"
                 f" AND {QuerySpecCompiler._time_literal(time_field, end)}"
             )
         if not clauses:

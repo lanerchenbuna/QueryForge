@@ -85,6 +85,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--retrieval-corpus", action="append", default=[], help="JSONL knowledge corpus to audit for holdout contamination")
     parser.add_argument("--repeat", type=int, default=1, help="Repetitions per task")
+    parser.add_argument("--parallel-candidates", type=int, choices=(1, 2, 3), default=None,
+                        help="Force the same candidate count for every workflow task")
+    parser.add_argument("--skill-mode", choices=("auto", "off"), default="auto")
     parser.add_argument("--provider", default=None, help="Tier 3 model provider")
     parser.add_argument("--model", default=None, help="Tier 3 model name")
     parser.add_argument("--limit", type=int, default=0, help="Cap the task count")
@@ -121,6 +124,8 @@ class BenchmarkContext:
     runner: str = "planner"
     skipped: list[dict[str, str]] = field(default_factory=list)
     repeats: int = 1
+    parallel_candidates: int | None = None
+    skill_mode: str = "auto"
 
 
 # --------------------------------------------------------------------- helpers
@@ -163,6 +168,20 @@ def _tool_calls_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Derive the tool-call trace from a recorded planner payload."""
     from queryforge.orchestration.planner.plan import ACTION_TOOL_MAP
 
+    spans = (payload.get("observability") or {}).get("spans") or []
+    tool_spans = [span for span in spans if span.get("kind") == "tool"]
+    if tool_spans:
+        # A query step can also validate dates and several join grains. Counting
+        # one call per step hides these governed tool invocations; parallel step
+        # counters can overlap. The individual spans provide their real identity.
+        return [{"step_id": span.get("attributes", {}).get("step_id"),
+                 "action": span.get("attributes", {}).get("action"),
+                 "tool": span.get("attributes", {}).get("tool"),
+                 "ok": span.get("attributes", {}).get("tool_status") == "succeeded",
+                 "status": span.get("attributes", {}).get("tool_status"),
+                 "duration_ms": span.get("duration_ms"),
+                 "error_category": span.get("attributes", {}).get("error_category")}
+                for span in tool_spans]
     calls: list[dict[str, Any]] = []
     for step in payload.get("steps") or []:
         if not isinstance(step, dict):
@@ -246,6 +265,8 @@ def run_analysis_task(
         "cost_usd": _cost_usd(usage, context.prices),
         "provider": context.provider,
         "model": context.model,
+        "controls": {"parallel_candidates": context.parallel_candidates, "skill_mode": context.skill_mode,
+                     "history_top_k": 0, "vector_kb": False, "today": "2024-12-31"},
         "runner": context.runner,
         "error": error,
     }
@@ -436,6 +457,10 @@ def build_report(
         return hashlib.sha256(Path(path).read_bytes()).hexdigest()
     sources = sorted([*PROJECT_ROOT.glob("queryforge/**/*.py"), *PROJECT_ROOT.glob("scripts/*.py"), PROJECT_ROOT/"pyproject.toml"])
     source_digest = hashlib.sha256("\n".join(f"{p.relative_to(PROJECT_ROOT)}:{digest(p)}" for p in sources).encode()).hexdigest()
+    assets = sorted([PROJECT_ROOT / "models.yml", PROJECT_ROOT / "queryforge/core/default_models.yml",
+                     *(p for p in (PROJECT_ROOT / "queryforge/bundled_skills").rglob("*")
+                       if p.is_file() and p.suffix in {".md", ".yml", ".yaml", ".json", ".py"})])
+    asset_digest = hashlib.sha256("\n".join(f"{p.relative_to(PROJECT_ROOT)}:{digest(p)}" for p in assets).encode()).hexdigest()
     by_task = {}
     for o in outcomes:
         by_task.setdefault(o.task_id, []).append(o.passed)
@@ -457,6 +482,8 @@ def build_report(
         "runner": context.runner,
         "provider": context.provider,
         "model": context.model,
+        "controls": {"parallel_candidates": context.parallel_candidates, "skill_mode": context.skill_mode,
+                     "history_top_k": 0, "vector_kb": False, "today": "2024-12-31"},
         "repeats": repeats,
         "ablations": list(ablations),
         "state_root": str(context.state_root),
@@ -466,7 +493,10 @@ def build_report(
         "thresholds": thresholds.get(_tier_key(tier)) or {},
         "price_table": context.prices,
         "provenance": {"source_sha256": source_digest,
+                       "assets_sha256": asset_digest,
                        "datasets_sha256": {k: digest(_project_path(v["database"])) for k,v in context.datasets.items()},
+                       "contracts_sha256": {k: {f: digest(_project_path(v[f])) for f in ("semantic_model", "sql_policy")}
+                                            for k,v in context.datasets.items()},
                        "gold_sha256": hashlib.sha256(json.dumps([s.model_dump() for s in specs],sort_keys=True).encode()).hexdigest(),
                        "threshold_sha256": hashlib.sha256(json.dumps(thresholds,sort_keys=True).encode()).hexdigest(),
                        "git_head": subprocess.run(["git","rev-parse","HEAD"],cwd=PROJECT_ROOT,capture_output=True,text=True).stdout.strip(),
@@ -497,6 +527,7 @@ def ablation_sweep(
         provider=context.provider,
         model=context.model,
         runner=context.runner, repeats=context.repeats,
+        parallel_candidates=context.parallel_candidates, skill_mode=context.skill_mode,
     )
     baseline_outcomes, _ = run_suite(specs, baseline_context, tier=1)
     baseline_metrics = aggregate(baseline_outcomes, thresholds={})
@@ -519,6 +550,7 @@ def ablation_sweep(
             provider=context.provider,
             model=context.model,
             runner=context.runner, repeats=context.repeats,
+            parallel_candidates=context.parallel_candidates, skill_mode=context.skill_mode,
             ablations=frozenset({feature}),
         )
         outcomes, _ = run_suite(specs, ablated, tier=1)
@@ -720,8 +752,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     from queryforge.evaluation import load_spec_splits
 
     all_specs = load_spec_splits(_project_path(args.tasks_dir))
-    from queryforge.evaluation.isolation import audit_splits, audit_corpus
+    from queryforge.evaluation.isolation import audit_splits, audit_corpus, audit_dataset_schemas
     audit_splits(all_specs)
+    audit_dataset_schemas(all_specs, datasets, PROJECT_ROOT)
     for corpus in args.retrieval_corpus:
         audit_corpus(all_specs, _project_path(corpus))
     specs = select_specs(
@@ -746,6 +779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         repeats=args.repeat,
         provider=args.provider,
         model=args.model,
+        parallel_candidates=args.parallel_candidates, skill_mode=args.skill_mode,
     )
     outcomes, traces = run_suite(specs, context, tier=args.tier)
     report = build_report(

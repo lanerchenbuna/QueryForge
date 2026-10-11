@@ -6,25 +6,21 @@ rejected by the real policy engine (with the case's sql_policy), and any legitim
 query case whose generated SQL is rejected counts as a false positive.
 
 Result comparison policy (declared, deterministic):
-- Row ORDER is ignored (multiset comparison); DUPLICATE rows are preserved —
-  the comparison never deduplicates with a set.
-- Column ORDER is tolerated when the column name sets match.
-- Column SETS may differ when the widths differ: comparison is done on the
-  columns the two projections share by name, so an answer that is correct but
-  projects a different *number* of columns is not scored semantically wrong.
-  The difference itself is reported per case as ``extra_columns`` /
-  ``missing_columns`` and in aggregate as ``projection_difference_rate``.
-  Equal widths with disjoint names keep the positional fallback, so a renamed
-  column holding the same values is not penalised. Different widths *and* no
-  shared column name is a different query shape and is not equivalent.
-- NULL compares equal to NULL only.
-- Floats: integral floats compare equal to ints; non-integral floats are
-  rounded to 10 decimal places before comparison (float-noise tolerance);
-  non-finite floats compare as the strings "Infinity"/"-Infinity"/"NaN".
-- Every run uses an ISOLATED state root (history/orchestration/vector) so
-  evaluation never pollutes production retrieval or session state.
+- All reference columns are required by default. Shared columns cannot hide an
+  omitted metric. Auxiliary reference columns and additional output columns
+  require an explicit result_contract.
+- Column names align positions; cells inside a row are never permuted. Outer
+  rows are compared as multisets preserving duplicates, unless an ordered
+  contract or reference ORDER BY requires delivery order.
+- Empty results obey the declared empty policy. Only a successful run can
+  receive a correct-result verdict.
+- NULL and booleans remain distinct from numbers; non-finite numbers fail.
+  Finite floats use 1e-9 relative and absolute tolerance.
+- Legacy equal-width, completely renamed projections retain positional alias
+  matching only without an explicit contract.
+- Every run uses an ISOLATED state root (history/orchestration/vector).
 
-Token and cost values are deterministic estimates, not provider-reported billing usage.
+Token and cost reports distinguish measured provider usage from fallback estimates.
 """
 
 from __future__ import annotations
@@ -53,6 +49,7 @@ from queryforge.domain.security import SQLPolicyViolation, load_sql_policy
 from queryforge.infrastructure.db.sqlite_connector import SQLiteConnector
 from queryforge.infrastructure.models.factory import ModelFactory
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
+from queryforge.evaluation.results import ResultContract, compare_results, cells_match
 
 # Comparison tolerance for non-integral floats (see module docstring).
 FLOAT_COMPARISON_ROUNDING = 10
@@ -370,11 +367,12 @@ def _evaluate_query(
         # a false positive; trusting the expected SQL would make precision
         # tautologically 1.0.
         policy_rejected = _generated_policy_outcome(output)
-        semantic_correct = _semantic_equivalent(
+        semantic_correct = output.get("status") == "success" and _semantic_equivalent(
             output.get("rows", []),
             output.get("columns"),
             expected_rows,
             expected_columns,
+            contract=_case_result_contract(case),
         )
         extra_columns, missing_columns = _projection_difference(
             output.get("columns"), expected_columns
@@ -386,6 +384,7 @@ def _evaluate_query(
             database,
             expected_rows,
             expected_columns,
+            contract=_case_result_contract(case),
         )
         return {
             "id": case.get("id", index),
@@ -684,86 +683,35 @@ def _candidate_correct(
     database: Path,
     expected_rows: list[list[Any]],
     expected_columns: list[str],
+    *, contract: ResultContract | None = None,
 ) -> bool | None:
     if not sql:
         return None
     try:
         columns, rows = _execute_expected(database, sql)
-        return _semantic_equivalent(rows, columns, expected_rows, expected_columns)
+        return _semantic_equivalent(rows, columns, expected_rows, expected_columns, contract=contract)
     except Exception:
         return False
 
 
 def _semantic_equivalent(
-    actual_rows: list[list[Any]],
-    actual_columns: list[str] | None,
-    expected_rows: list[list[Any]],
-    expected_columns: list[str],
+    actual_rows: list[list[Any]], actual_columns: list[str] | None,
+    expected_rows: list[list[Any]], expected_columns: list[str], *,
+    contract: ResultContract | None = None,
 ) -> bool:
-    """Compare result sets by content, tolerant to column order and row order.
-
-    Comparison happens on the columns the two projections **share by name**:
-
-    * Equal name sets in a different order are reordered and compared in full.
-    * Different column counts (the defect this rule exists for) compare on the
-      shared columns only, so an answer that is correct but projects a
-      different *number* of columns is not scored as semantically wrong. The
-      difference is reported separately by the caller (see
-      ``_projection_difference``) rather than silently ignored.
-    * Equal column counts with disjoint names fall back to positional
-      comparison — this keeps the historical behaviour for a renamed column
-      (``anime_count`` vs ``action_anime_count``) with identical values.
-    * When the two projections share no column name *and* their counts differ,
-      this is a different query shape, not a projection difference, so the
-      result is not equivalent.
-
-    Known limitation: a renamed column whose count also differs cannot be
-    matched by name and is still scored as wrong. Alias normalisation is not
-    attempted here.
-
-    Row order is never significant and duplicate rows are preserved. When
-    column names are unavailable on the actual side, comparison falls back to
-    positional values (the historical behaviour).
-    """
-    actual_columns = list(actual_columns or [])
-    if actual_columns and expected_columns:
-        if set(actual_columns) == set(expected_columns):
-            reordered = _reorder_columns(actual_columns, actual_rows, expected_columns)
-            return _canonical_rows(reordered) == _canonical_rows(expected_rows)
-        if len(actual_columns) == len(expected_columns) and not (
-            set(actual_columns) & set(expected_columns)
-        ):
-            # Same width, completely different names: not a projection
-            # difference. Keep the positional comparison so a renamed column
-            # holding the same values is not newly penalised.
-            return _canonical_rows(actual_rows) == _canonical_rows(expected_rows)
-        actual_projection, expected_projection = _shared_column_projection(
-            actual_columns, expected_columns
-        )
-        if not actual_projection:
-            # Different widths AND no shared column name: the two results do not
-            # describe the same quantity, so this is a genuine mismatch.
-            return False
-        actual_rows = [[row[index] for index in actual_projection] for row in actual_rows]
-        expected_rows = [
-            [row[index] for index in expected_projection] for row in expected_rows
-        ]
-    return _canonical_rows(actual_rows) == _canonical_rows(expected_rows)
+    """Compare the entire required projection; auxiliary columns need a contract."""
+    return compare_results(actual_rows, actual_columns, expected_rows, expected_columns,
+                           contract=contract, positional_aliases=contract is None,
+                           cell_match=cells_match)
 
 
-def _shared_column_projection(
-    actual_columns: list[str],
-    expected_columns: list[str],
-) -> tuple[list[int], list[int]]:
-    """Index positions of the shared column names, in the expected order."""
-
-    actual_positions: list[int] = []
-    expected_positions: list[int] = []
-    for position, column in enumerate(expected_columns):
-        if column in actual_columns:
-            expected_positions.append(position)
-            actual_positions.append(actual_columns.index(column))
-    return actual_positions, expected_positions
+def _case_result_contract(case: dict[str, Any]) -> ResultContract | None:
+    if case.get("result_contract") is not None:
+        return ResultContract.model_validate(case["result_contract"])
+    # ORDER BY in the reference is an observable delivery obligation.
+    import sqlglot
+    tree = sqlglot.parse_one(case["expected_sql"], read="sqlite")
+    return ResultContract(row_order="ordered") if tree.args.get("order") else None
 
 
 def _projection_difference(
@@ -1219,9 +1167,8 @@ def _build_report(
             "token_source_measured_cases": sum(
                 1 for item in results if item.get("token_source") == "measured"
             ),
-            # Projection tolerance (see module docstring): semantic_correctness_rate
-            # compares the shared columns, so a differing projection is reported
-            # here instead of being silently absorbed into the correctness rate.
+            # Diagnostic only: required projections are checked independently.
+            # An explicit contract can declare legitimate auxiliary columns.
             "projection_difference_rate": _rate(
                 [
                     bool(item.get("extra_columns") or item.get("missing_columns"))

@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from queryforge.evaluation.results import ResultContract
 
 #: Splits of the benchmark; the file name is the split (contract 2.2/2.4).
 KNOWN_SPLITS: tuple[str, ...] = ("dev", "regression", "holdout")
@@ -117,7 +118,10 @@ class TaskSpec(BaseModel):
     required_evidence: list[str] = Field(default_factory=list)
     forbidden_evidence: list[str] = Field(default_factory=list)
     expected_values: dict[str, Any] = Field(default_factory=dict)
+    result_contract: ResultContract | None = None
+    required_sql_tables: list[str] = Field(default_factory=list)
     values_tolerance: dict[str, float] = Field(default_factory=dict)
+    values_absolute_tolerance: dict[str, float] = Field(default_factory=dict)
     answer_must_reference_evidence: bool = True
     forbidden_claims: list[str] = Field(default_factory=list)
     required_claims: list[str] = Field(default_factory=list)
@@ -142,6 +146,24 @@ class TaskSpec(BaseModel):
     def _normalize_lists(cls, value: Any) -> list[str]:
         return _clean_text_list(value)
 
+    @field_validator("required_sql_tables", mode="before")
+    @classmethod
+    def _require_source_names(cls, value: Any) -> list[str]:
+        # Unlike descriptive lists, an invalid constraint must not be dropped.
+        if not isinstance(value, list):
+            raise ValueError("required_sql_tables must be a list of non-empty table names")
+        names: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("required_sql_tables must contain non-empty strings")
+            if not item.strip().isascii() or not item.strip().isidentifier():
+                raise ValueError("required_sql_tables supports unqualified ASCII identifiers")
+            name = item.strip().casefold()
+            if name in names:
+                raise ValueError("required_sql_tables contains a duplicate table name")
+            names.append(name)
+        return names
+
     @field_validator("task_id", "dataset", "question")
     @classmethod
     def _require_text(cls, value: str) -> str:
@@ -155,7 +177,7 @@ class TaskSpec(BaseModel):
     def _normalize_replaceable(cls, value: Any) -> dict[str, list[str]]:
         return _clean_replaceable(value)
 
-    @field_validator("values_tolerance", mode="before")
+    @field_validator("values_tolerance", "values_absolute_tolerance", mode="before")
     @classmethod
     def _normalize_tolerance(cls, value: Any) -> dict[str, float]:
         return _clean_tolerance(value)

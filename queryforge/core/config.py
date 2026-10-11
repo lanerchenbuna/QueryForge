@@ -73,6 +73,7 @@ class Config:
     report_max_rows: int = 50
     report_max_charts: int = 3
     report_output_dir: str = ".queryforge/reports"
+    report_retention_days: int = 30
     mcp_resources_enabled: bool = True
     mcp_prompts_enabled: bool = True
     mcp_session_enabled: bool = True
@@ -223,6 +224,7 @@ def load_config(
             os.getenv("REPORT_MAX_CHARTS"), default=3, minimum=1
         ),
         report_output_dir=os.getenv("REPORT_OUTPUT_DIR", ".queryforge/reports"),
+        report_retention_days=min(_environment_int(os.getenv("REPORT_RETENTION_DAYS"), default=30, minimum=1), 3650),
         mcp_resources_enabled=_environment_bool(
             os.getenv("MCP_RESOURCES_ENABLED"), default=True
         ),

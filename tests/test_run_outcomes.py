@@ -102,11 +102,14 @@ class OutcomeDerivationTest(unittest.TestCase):
             derive_outcome(result_status="needs_clarification"), "needs_clarification"
         )
 
-    def test_absent_or_unknown_status_defaults_to_succeeded(self):
-        """Explicit and testable, rather than an implicit ``or "success"``."""
-        self.assertEqual(derive_outcome(), "succeeded")
-        self.assertEqual(derive_outcome(result_status=None), "succeeded")
-        self.assertEqual(derive_outcome(result_status="something-new"), "succeeded")
+    def test_absent_unknown_or_non_terminal_status_fails_closed(self):
+        for status in (None, "", "running", "something-new"):
+            with self.subTest(status=status):
+                self.assertEqual(derive_outcome(result_status=status), "failed")
+
+    def test_unverifiable_results_are_blocked(self):
+        for status in ("unsupported", "unverified"):
+            self.assertEqual(derive_outcome(result_status=status), "blocked")
 
 
 if __name__ == "__main__":

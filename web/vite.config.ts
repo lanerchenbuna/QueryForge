@@ -44,13 +44,16 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
-    server: isCodexSeatbeltSandbox
-      ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+    server: {
+      host: "127.0.0.1",
+      ...(isCodexSeatbeltSandbox ? { watch: { useFsEvents: false, usePolling: true } } : {}),
+    },
     plugins: [
       vinext(),
       sites(),
       cloudflare({
+        inspectorPort: false,
+        ...(process.env.STUDIO_STATE_DIR ? { persistState: { path: process.env.STUDIO_STATE_DIR } } : {}),
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         config: {
           ...localBindingConfig,

@@ -494,7 +494,7 @@ class PresetVerdictTest(unittest.TestCase):
         self.assertTrue(all(item.passed for item in outcome.checks))
         self.assertEqual(
             [item.name for item in outcome.checks],
-            [name for name in CHECK_NAMES if name not in {"budget"}]
+            [name for name in CHECK_NAMES if name not in {"budget", "sql_sources"}]
             + ["budget"]
             + [],
         )
@@ -1673,6 +1673,7 @@ class ContractSurfaceTest(unittest.TestCase):
                 "required_evidence",
                 "forbidden_evidence",
                 "expected_values",
+                "sql_sources",
                 "evidence_anchor",
                 "tool_legality",
                 "tool_validity",

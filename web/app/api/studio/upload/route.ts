@@ -1,5 +1,7 @@
 import { requireStudioUser, studioAuthMode } from "@/app/studio-auth";
 import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
+import { localBackendBase } from "@/app/lib/local-boundary";
+import { parseCsv } from "@/app/lib/source-profile";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 // Must match PublishService.ALLOWED_EXTENSIONS in
@@ -125,14 +127,6 @@ function referencedColumns(expression: string): string[] {
   return [...found];
 }
 
-function parseCsvHeaderLine(firstLine: string): string[] {
-  const cleaned = firstLine.replace(/^\uFEFF/, "").trim();
-  if (!cleaned) return [];
-  return cleaned
-    .split(",")
-    .map((cell) => cell.trim().replace(/^"([\s\S]*)"$/, "$1"));
-}
-
 /**
  * Reads the first non-empty line of a CSV and checks that the columns named
  * by the semantic contract (grain, primary key, dimensions, and any bare
@@ -144,9 +138,7 @@ async function validateCsvAgainstContract(
   contract: UploadedSemanticContract,
 ): Promise<string[]> {
   const sample = await file.slice(0, CSV_HEADER_READ_LIMIT).text();
-  const firstNonEmptyLine =
-    sample.split(/\r?\n/).find((line) => line.trim().length > 0) ?? "";
-  const header = parseCsvHeaderLine(firstNonEmptyLine);
+  const header = (parseCsv(sample, file.size > CSV_HEADER_READ_LIMIT, 1)[0] ?? []).map(value => value.trim());
   const headerLookup = new Set(header.map((value) => value.toLowerCase()));
   const missing = new Set<string>();
   const requiredColumns = [
@@ -341,7 +333,7 @@ export async function POST(request: Request) {
     // verdict. CSV files get their header columns checked against the
     // semantic contract; binary files can only be marked not-verified.
     const fileValidations: FileValidation[] = [];
-    let allHeadersPass = true;
+    let csvHeadersPass = true;
     for (const file of files) {
       if (extension(file.name) === "csv") {
         const missingColumns = await validateCsvAgainstContract(
@@ -356,7 +348,7 @@ export async function POST(request: Request) {
         if (missingColumns.length === 0) {
           validation.status = "ok";
         } else {
-          allHeadersPass = false;
+          csvHeadersPass = false;
         }
         fileValidations.push(validation);
       } else {
@@ -364,7 +356,8 @@ export async function POST(request: Request) {
           file: file.name,
           validation_status: "not_verified_server_side",
         });
-        allHeadersPass = false;
+        // Binary schema is unknown here. The Python publisher performs the
+        // physical check; browser/header inspection must not suppress it.
       }
     }
 
@@ -392,7 +385,7 @@ export async function POST(request: Request) {
       new Set(stored.map((file) => extension(file.name).toUpperCase())),
     ).join(" · ");
     const contractStatus =
-      allHeadersPass && form.get("reviewed") === "true"
+      csvHeadersPass && form.get("reviewed") === "true"
         ? "reviewed"
         : "review_pending";
     let sourceStatus = "awaiting_validation";
@@ -408,8 +401,8 @@ export async function POST(request: Request) {
     // stays authoritative for Studio bookkeeping; this result is reported
     // honestly and never fabricates a pass.
     let pythonPublish: PythonPublishStatus = { status: "not_attempted" };
-    const apiUrl = process.env.QUERYFORGE_API_URL;
-    if (apiUrl && contractStatus === "reviewed") {
+    const apiUrl = localBackendBase(process.env.QUERYFORGE_API_URL);
+    if (contractStatus === "reviewed") {
       try {
         const forward = new FormData();
         forward.set(
@@ -429,6 +422,7 @@ export async function POST(request: Request) {
             },
             body: forward,
             signal: AbortSignal.timeout(120_000),
+            redirect: "manual",
           },
         );
         type PublishPayload = {

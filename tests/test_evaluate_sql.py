@@ -500,10 +500,8 @@ class EvaluateSqlTest(unittest.TestCase):
 
     # ------------------------------------------------- projection tolerance (D-1)
     #
-    # The evaluator compares the columns the two projections share by name, so an
-    # answer that is correct but projects a different set of columns is no longer
-    # scored as semantically wrong. The difference is reported instead, as
-    # extra_columns / missing_columns and as projection_difference_rate.
+    # Auxiliary reference columns need an explicit task contract. Defaults
+    # require the full projection; no shared-column-only correctness verdict.
     #
     # Regression origin: 8 of the 40 cases in the Step 0 baseline asked only for
     # anime titles while the gold reference SQL additionally projected
@@ -540,6 +538,7 @@ class EvaluateSqlTest(unittest.TestCase):
             case["expected_sql"] = (
                 "SELECT title, studio_name, tier FROM anime WHERE tier = 'Major'"
             )
+            case["result_contract"] = {"required_columns": ["title"]}
             report = self._run(
                 NarrowProjectionService(), [case], database, root / "assets"
             )
@@ -576,6 +575,7 @@ class EvaluateSqlTest(unittest.TestCase):
                 connection.execute("INSERT INTO items VALUES (1, 10.0), (2, 20.0)")
             case = self._query_case(str(database))
             case["expected_sql"] = "SELECT COUNT(*) AS n FROM items"
+            case["result_contract"] = {"required_columns": ["n"], "allow_extra_columns": True}
             report = self._run(
                 WideProjectionService(), [case], database, root / "assets"
             )

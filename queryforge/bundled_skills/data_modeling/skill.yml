@@ -3,3 +3,4 @@ description: Apply reliable dimensional, normalized, and event-modeling rules at
 allowed_nodes: [plan_mode, gen_sql, reflect, fix]
 enabled: false
 priority: 75
+selection_keywords: ["order revenue", "grain", "join", "independently", "line items", "schema", "粒度", "连接"]

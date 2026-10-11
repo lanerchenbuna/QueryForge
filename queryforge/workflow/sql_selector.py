@@ -8,6 +8,7 @@ from typing import Any
 
 from queryforge.core.schemas.models import Context, SQLContext
 from queryforge.domain.semantic import SemanticSQLValidator, normalize_sql_signature
+from queryforge.domain.semantic.request_contract import validate_output_contract
 from queryforge.infrastructure.tools.database_tool import DatabaseTool, UnsafeSQLError
 
 
@@ -45,12 +46,14 @@ class SQLSelector:
         preview_limit: int = 20,
         timeout_seconds: float = 10,
         weights: dict[str, float] | None = None,
+        cancel_check=None,
     ) -> None:
         self.database_tool = database_tool
         self.max_preview = min(max(max_preview, 1), self.MAX_PREVIEW)
         self.preview_limit = min(max(preview_limit, 1), 100)
         self.timeout_seconds = max(timeout_seconds, 0.001)
         self.weights = {**self.DEFAULT_WEIGHTS, **(weights or {})}
+        self.cancel_check = cancel_check
 
     def select(
         self,
@@ -60,7 +63,12 @@ class SQLSelector:
         started = time.monotonic()
         evaluations: list[dict[str, Any]] = []
         seen_signatures: dict[str, int] = {}
+        preview_count = 0
         for index, candidate in enumerate(candidates):
+            if self.cancel_check and self.cancel_check():
+                return {"selected_index": None, "selected_sql": None,
+                        "reason": "Candidate selection cancelled.", "evaluations": evaluations,
+                        "preview_status": "cancelled"}
             sql = candidate.get("sql")
             signature = (
                 normalize_sql_signature(sql)
@@ -86,7 +94,7 @@ class SQLSelector:
                 continue
             if signature:
                 seen_signatures.setdefault(signature, index)
-            if index >= self.max_preview or time.monotonic() - started >= self.timeout_seconds:
+            if preview_count >= self.max_preview or time.monotonic() - started >= self.timeout_seconds:
                 evaluations.append(
                     {
                         "candidate_index": index,
@@ -98,8 +106,14 @@ class SQLSelector:
                     }
                 )
                 continue
-            evaluations.append(self._evaluate(index, candidate, context))
+            evaluation = self._evaluate(index, candidate, context)
+            preview_count += int(evaluation.get("preview_attempted", False))
+            evaluations.append(evaluation)
 
+        if self.cancel_check and self.cancel_check():
+            return {"selected_index": None, "selected_sql": None,
+                    "reason": "Candidate selection cancelled.", "evaluations": evaluations,
+                    "preview_status": "cancelled"}
         eligible = [
             evaluation for evaluation in evaluations
             if evaluation.get("status") == "eligible"
@@ -147,6 +161,10 @@ class SQLSelector:
         }
         try:
             clean_sql = DatabaseTool.validate_readonly_sql(str(sql))
+            projection_error = validate_output_contract(context.task.question, clean_sql)
+            if projection_error:
+                evaluation["rejection_reason"] = projection_error
+                return evaluation
             evaluation["ast_valid"] = True
             decision = self.database_tool.policy_engine.evaluate(clean_sql)
             evaluation["governance_allowed"] = decision.allowed
@@ -163,6 +181,10 @@ class SQLSelector:
             if validation is not None and validation.status == "violation":
                 evaluation["rejection_reason"] = validation.error_message()
                 return evaluation
+            if self.cancel_check and self.cancel_check():
+                evaluation["rejection_reason"] = "Candidate selection cancelled."
+                return evaluation
+            evaluation["preview_attempted"] = True
             preview = self.database_tool.execute_sql_preview(
                 clean_sql,
                 self.preview_limit,

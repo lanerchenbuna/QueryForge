@@ -93,6 +93,10 @@ export async function ensureStudioSchema(db: D1Database) {
      ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0`,
   );
 
+  for (const column of ["output_json", "data_version", "expires_at"]) {
+    await ensureColumn(db, "studio_runs", column, `ALTER TABLE studio_runs ADD COLUMN ${column} TEXT`);
+  }
+
   await db.batch([
     db.prepare(
       `INSERT OR IGNORE INTO studio_domains (
@@ -145,6 +149,15 @@ async function ensureColumn(
     (item) => String((item as Record<string, unknown>).name) === column,
   );
   if (!hasColumn) {
-    await db.prepare(alteration).run();
+    try {
+      await db.prepare(alteration).run();
+    } catch (error) {
+      // Concurrent startup requests can both observe an older schema. Only
+      // tolerate the error if the other request actually added this column.
+      const current = await db.prepare(`PRAGMA table_info(${table})`).all();
+      if (!current.results.some(item => String((item as Record<string, unknown>).name) === column)) {
+        throw error;
+      }
+    }
   }
 }

@@ -3,7 +3,7 @@
   "database": "sample_data/anime_streaming/anime_streaming.sqlite",
   "semantic_model": "sample_data/anime_streaming/semantic_model.yml",
   "model_name": "anime_streaming",
-  "fingerprint": "f8920a826149de8dcfb7376e45d4ff70b378609db7c109d88de69f3b9c5dbb50",
+  "fingerprint": "b439e27c06b3f6b0cbebe467f467c1ad0bf57159c5ebf1c590ed90cc4a704041",
   "sections": {
     "schema": [
       {
@@ -2382,7 +2382,7 @@
         "description": "Mean user rating score on a one-to-ten scale.",
         "entity": "rating",
         "aggregation": "ratio",
-        "expression": "CAST(SUM(fact_rating.score) AS REAL) / NULLIF(COUNT(*), 0)",
+        "expression": "CAST(SUM(fact_rating.score) AS REAL) * 1.0 / NULLIF(COUNT(*), 0)",
         "synonyms": [
           "average rating",
           "mean score",
@@ -2397,7 +2397,25 @@
           "calendar.year",
           "calendar.month"
         ],
-        "time_field": "fact_rating.rating_date_key"
+        "time_field": "fact_rating.rating_date_key",
+        "ratio": {
+          "numerator": "SUM(fact_rating.score)",
+          "denominator": "COUNT(*)",
+          "scale": 1.0
+        },
+        "analysis": {
+          "unit": "score_1_to_10",
+          "additivity": "non_additive",
+          "non_additive_dimensions": [],
+          "time": {
+            "role": "rating_event",
+            "timezone": "UTC",
+            "fiscal_year_start_month": 1,
+            "coverage_start": "2023-01-01",
+            "complete_through": "2025-12-31",
+            "require_complete_periods": true
+          }
+        }
       },
       {
         "contract_version": "1.0",
@@ -2431,7 +2449,7 @@
         "description": "Completed playback sessions divided by all playback sessions.",
         "entity": "watch_session",
         "aggregation": "ratio",
-        "expression": "CAST(SUM(fact_watch_session.completed_flag) AS REAL) / NULLIF(COUNT(*), 0)",
+        "expression": "CAST(SUM(fact_watch_session.completed_flag) AS REAL) * 1.0 / NULLIF(COUNT(*), 0)",
         "synonyms": [
           "completion rate",
           "completed view rate"
@@ -2447,7 +2465,25 @@
           "calendar.year",
           "calendar.month"
         ],
-        "time_field": "fact_watch_session.watch_date_key"
+        "time_field": "fact_watch_session.watch_date_key",
+        "ratio": {
+          "numerator": "SUM(fact_watch_session.completed_flag)",
+          "denominator": "COUNT(*)",
+          "scale": 1.0
+        },
+        "analysis": {
+          "unit": "fraction",
+          "additivity": "non_additive",
+          "non_additive_dimensions": [],
+          "time": {
+            "role": "watch_event",
+            "timezone": "UTC",
+            "fiscal_year_start_month": 1,
+            "coverage_start": "2023-01-01",
+            "complete_through": "2025-12-31",
+            "require_complete_periods": true
+          }
+        }
       },
       {
         "contract_version": "1.0",
@@ -2554,7 +2590,20 @@
           "calendar.year",
           "calendar.month"
         ],
-        "time_field": "fact_watch_session.watch_date_key"
+        "time_field": "fact_watch_session.watch_date_key",
+        "analysis": {
+          "unit": "users",
+          "additivity": "non_additive",
+          "non_additive_dimensions": [],
+          "time": {
+            "role": "watch_event",
+            "timezone": "UTC",
+            "fiscal_year_start_month": 1,
+            "coverage_start": "2023-01-01",
+            "complete_through": "2025-12-31",
+            "require_complete_periods": true
+          }
+        }
       },
       {
         "contract_version": "1.0",
@@ -2589,7 +2638,20 @@
           "calendar.year",
           "calendar.month"
         ],
-        "time_field": "fact_watch_session.watch_date_key"
+        "time_field": "fact_watch_session.watch_date_key",
+        "analysis": {
+          "unit": "hours",
+          "additivity": "additive",
+          "non_additive_dimensions": [],
+          "time": {
+            "role": "watch_event",
+            "timezone": "UTC",
+            "fiscal_year_start_month": 1,
+            "coverage_start": "2023-01-01",
+            "complete_through": "2025-12-31",
+            "require_complete_periods": true
+          }
+        }
       }
     ],
     "relationships": [

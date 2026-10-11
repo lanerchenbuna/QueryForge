@@ -1,6 +1,8 @@
 "use client";
 
 import { publicationOutcome } from "./lib/publication-status";
+import { profileSourceFiles, type SourceProfile } from "./lib/source-profile";
+import { sourceStatus } from "./lib/source-status";
 
 import {
   ChangeEvent,
@@ -92,7 +94,7 @@ type UploadedSource = {
   size: string;
   tables: number;
   rows: string;
-  status: "Ready" | "Draft";
+  status: "Ready" | "Publish failed" | "Awaiting validation";
 };
 
 type DataDomain = {
@@ -118,7 +120,7 @@ type SemanticDraft = {
   metrics: Array<{
     name: string;
     description: string;
-    aggregation: "count" | "sum";
+    aggregation: "count" | "sum" | "ratio";
     expression: string;
   }>;
 };
@@ -138,13 +140,13 @@ const INITIAL_SEMANTIC_DRAFT: SemanticDraft = {
       name: "uploaded_record_count",
       description: "Count of reviewed records at the declared grain.",
       aggregation: "count",
-      expression: "COUNT(*)",
+      expression: "COUNT(DISTINCT uploaded_record.record_id)",
     },
     {
       name: "uploaded_amount_sum",
       description: "Sum of the profiled amount field in source-native units.",
       aggregation: "sum",
-      expression: "SUM(amount)",
+      expression: "SUM(uploaded_record.amount)",
     },
   ],
 };
@@ -636,9 +638,6 @@ const EXAMPLE_QUESTIONS = [
   "Which anime drive both engagement and merch GMV?",
 ];
 
-const sleep = (duration: number) =>
-  new Promise((resolve) => window.setTimeout(resolve, duration));
-
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -754,12 +753,14 @@ const EMPTY_LIVE_RESULT: QueryResult = {
 };
 
 /** The governed request both transports send; the body is not transport-specific. */
-function queryRequestBody(question: string): Record<string, unknown> {
+function queryRequestBody(question: string, domain?: DataDomain): Record<string, unknown> {
   return {
     question,
+    ...(domain && !domain.isSample ? { domain_id: domain.id } : {
     database: "sample_data/anime_streaming/anime_streaming.sqlite",
     semantic_model_path: "sample_data/anime_streaming/semantic_model.yml",
     sql_policy_path: "sample_data/anime_streaming/sql_policy.yml",
+    }),
     visualize: true,
     report: true,
     complexity_mode: "auto",
@@ -833,6 +834,7 @@ export default function Home() {
   const [useStreaming, setUseStreaming] = useState(true);
   const [streamState, setStreamState] = useState<StreamRunState | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const selectionEpochRef = useRef(0);
   const [result, setResult] = useState<QueryResult>(DEMO_RESULT);
   const [runs, setRuns] = useState<RunRecord[]>(INITIAL_RUNS);
   const [selectedEntity, setSelectedEntity] = useState("watch_session");
@@ -848,6 +850,7 @@ export default function Home() {
   const [uploadStep, setUploadStep] = useState(1);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [isProfiling, setIsProfiling] = useState(false);
+  const [sourceProfile, setSourceProfile] = useState<SourceProfile | null>(null);
   const [semanticReviewed, setSemanticReviewed] = useState(false);
   const [semanticValidated, setSemanticValidated] = useState(false);
   const [semanticDraft, setSemanticDraft] = useState<SemanticDraft>(
@@ -931,8 +934,8 @@ export default function Home() {
           type: String(source.source_type ?? "DATA"),
           size: formatBytes(Number(source.size_bytes ?? 0)),
           tables: Number(source.table_count ?? 1),
-          rows: "Profiled",
-          status: "Ready" as const,
+          rows: "Not retained",
+          status: sourceStatus(source.status),
         }));
         if (persisted.length) setUploadedSources(persisted);
       })
@@ -1025,7 +1028,7 @@ export default function Home() {
     try {
       const state = await consumeAskStream({
         url: "/api/queryforge/ask/stream",
-        body: queryRequestBody(submitted),
+        body: queryRequestBody(submitted, activeDomain),
         signal: controller.signal,
         // React needs a fresh object per frame; the consumed state is mutated in
         // place so the copy also snapshots the frame list.
@@ -1046,7 +1049,7 @@ export default function Home() {
   async function runQuery(nextQuestion?: string) {
     const submitted = (nextQuestion ?? query).trim();
     if (!submitted || isRunning) return;
-    if (!activeDomain.isSample) {
+    if (!activeDomain.isSample && (activeDomain.status !== "ready" || connection !== "live")) {
       setActiveView("ask");
       setToast(
         activeDomainSources.length
@@ -1056,6 +1059,7 @@ export default function Home() {
       return;
     }
 
+    selectionEpochRef.current++;
     setQuery(submitted);
     setActiveView("ask");
     setIsRunning(true);
@@ -1078,7 +1082,7 @@ export default function Home() {
         const response = await fetch("/api/queryforge/ask", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(queryRequestBody(submitted)),
+          body: JSON.stringify(queryRequestBody(submitted, activeDomain)),
         });
         setRunStage(2);
         let payload: unknown = null;
@@ -1123,6 +1127,9 @@ export default function Home() {
       nextResult = { ...DEMO_RESULT, provenance: "demo" };
     }
 
+    const persistedRunId = /^(qf_[a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(nextResult.runId)
+      ? nextResult.runId : `qf_${crypto.randomUUID().replaceAll("-", "")}`;
+    nextResult = { ...nextResult, runId: persistedRunId };
     setRunStage(4);
     setResult(nextResult);
     setRuns((current) => [
@@ -1139,11 +1146,6 @@ export default function Home() {
       },
       ...current.filter((item) => item.id !== nextResult.runId),
     ]);
-    const persistedRunId = /^(qf_[a-f0-9]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(
-      nextResult.runId,
-    )
-      ? nextResult.runId
-      : `qf_${crypto.randomUUID().replaceAll("-", "")}`;
     void fetch("/api/studio/runs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1157,8 +1159,17 @@ export default function Home() {
         rowCount: nextResult.rowCount,
         duration: provenance === "live" ? "live" : "1.84s",
         isDemo: provenance === "demo",
+        snapshot: { ...nextResult, runId: persistedRunId },
+        dataVersion: String((nextResult.output?.domain as Record<string, unknown> | undefined)?.data_version ?? ""),
       }),
-    }).catch(() => undefined);
+    }).then(async response => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(body?.detail ?? `History storage returned ${response.status}.`);
+      }
+    }).catch(error => {
+      setToast(`Query result is available, but history was not saved: ${error instanceof Error ? error.message : String(error)}`);
+    });
     setIsRunning(false);
     if (isFailureStatus(nextResult.status)) {
       setToast(`${statusLabel(nextResult.status)} — ${nextResult.detail}`);
@@ -1206,6 +1217,7 @@ export default function Home() {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
     setUploadFiles(files);
+    setSourceProfile(null);
     setSemanticReviewed(false);
     setSemanticValidated(false);
     setSemanticDraft({
@@ -1218,9 +1230,15 @@ export default function Home() {
   async function profileFiles() {
     if (!uploadFiles.length) return;
     setIsProfiling(true);
-    await sleep(900);
-    setIsProfiling(false);
-    setUploadStep(2);
+    try {
+      const profile = await profileSourceFiles(uploadFiles);
+      setSourceProfile(profile);
+      setUploadStep(2);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not inspect the source files.");
+    } finally {
+      setIsProfiling(false);
+    }
   }
 
   async function validateUploadSemantic() {
@@ -1236,16 +1254,15 @@ export default function Home() {
       semanticDraft.metrics.length > 0 &&
       semanticDraft.metrics.every(
         (metric) =>
-          metric.name && metric.description && metric.expression,
+          metric.name.trim() && metric.description.trim() && metric.expression.trim(),
       );
-    if (requiredFields.some((value) => !value.trim()) || !metricsValid) {
+    if (requiredFields.some((value) => !value.trim()) || !metricsValid || !semanticDraft.dimensions.length || semanticDraft.dimensions.some(value => !value.trim())) {
       setSemanticValidated(false);
       setToast("Complete the entity, grain, owner, and metric contract first.");
       return;
     }
-    await sleep(500);
     setSemanticValidated(true);
-    setToast("Semantic contract passed all blocking checks.");
+    setToast("Draft fields checked. Publication will verify the physical and semantic contracts.");
   }
 
   async function publishUpload() {
@@ -1322,13 +1339,36 @@ export default function Home() {
     setToast(publication.detail);
   }
 
-  function selectRun(run: RunRecord) {
+  async function selectRun(run: RunRecord) {
+    if (isRunning) { setToast("Cancel or finish the current run before replaying history."); return; }
+    const epoch = ++selectionEpochRef.current;
     setActiveDomainId(run.domainId);
     setQuery(run.question);
     setActiveView("ask");
+    if (run.isDemo) {
+      setResult(DEMO_RESULT);
+      setToast("Offline demo selected.");
+      return;
+    }
+    try {
+      const response = await fetch(`/api/studio/runs?run_id=${encodeURIComponent(run.id)}&domain_id=${encodeURIComponent(run.domainId)}`);
+      const payload = await response.json() as { run: QueryResult; detail?: string; data_version?: string };
+      if (!response.ok) throw new Error(payload.detail ?? "Saved run unavailable.");
+      if (epoch !== selectionEpochRef.current) return;
+      setResult(payload.run);
+      setStreamState(null);
+      setToast(`Saved run replayed${payload.data_version ? ` · data version ${payload.data_version}` : ""}.`);
+    } catch (error) {
+      if (epoch !== selectionEpochRef.current) return;
+      setResult({ ...EMPTY_LIVE_RESULT, runId: run.id, status: "failed", detail: error instanceof Error ? error.message : "Saved run unavailable." });
+    }
   }
 
   function selectDomain(domain: DataDomain, view: View = "overview") {
+    if (isRunning) { setToast("Cancel or finish the current run before switching data domains."); return; }
+    selectionEpochRef.current++;
+    setResult(EMPTY_LIVE_RESULT);
+    setStreamState(null);
     setActiveDomainId(domain.id);
     setDomainMenuOpen(false);
     setActiveView(view);
@@ -1345,6 +1385,7 @@ export default function Home() {
     description: string;
     owner: string;
   }) {
+    if (isRunning) { setToast("Cancel or finish the current run before creating a data domain."); return; }
     let created: DataDomain = {
       id: `domain_${crypto.randomUUID().replaceAll("-", "")}`,
       name: input.name,
@@ -1368,13 +1409,16 @@ export default function Home() {
           ownerEmail: chatgptUserEmail() ?? undefined,
         }),
       });
-      if (response.ok) {
-        const payload = (await response.json()) as { domain: DataDomain };
-        created = payload.domain;
-      }
-    } catch {
-      // Keep the complete workflow available in local demo mode.
+      const payload = (await response.json()) as { domain?: DataDomain; detail?: string };
+      if (!response.ok || !payload.domain) throw new Error(payload.detail ?? "Data domain storage unavailable.");
+      created = payload.domain;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not save the data domain.");
+      return;
     }
+    selectionEpochRef.current++;
+    setResult(EMPTY_LIVE_RESULT);
+    setStreamState(null);
     setDomains((current) => [...current, created]);
     setActiveDomainId(created.id);
     setCreateDomainOpen(false);
@@ -1441,16 +1485,16 @@ export default function Home() {
             </div>
           </div>
           <div className="workspace-progress-row">
-            <span>Semantic coverage</span>
-            <strong>{activeDomain.isSample ? "100%" : activeDomain.sourceCount ? "Draft" : "0%"}</strong>
+            <span>{activeDomain.isSample ? "Semantic coverage" : "Publication"}</span>
+            <strong>{activeDomain.isSample ? "100%" : activeDomain.status === "ready" ? "Ready" : "Draft"}</strong>
           </div>
           <div className="workspace-progress">
             <span
               style={{
                 width: activeDomain.isSample
                   ? "100%"
-                  : activeDomain.sourceCount
-                    ? "42%"
+                  : activeDomain.status === "ready"
+                    ? "100%"
                     : "0%",
               }}
             />
@@ -1600,6 +1644,7 @@ export default function Home() {
               runQuery={runQuery}
               openSources={() => setActiveView("sources")}
               openSemantic={() => setActiveView("semantic")}
+              openAsk={() => setActiveView("ask")}
               openRuns={() => setActiveView("runs")}
               connection={connection}
               runs={activeDomainRuns}
@@ -1671,6 +1716,7 @@ export default function Home() {
           step={uploadStep}
           files={uploadFiles}
           isProfiling={isProfiling}
+          sourceProfile={sourceProfile}
           reviewed={semanticReviewed}
           validated={semanticValidated}
           semanticDraft={semanticDraft}
@@ -1804,15 +1850,15 @@ function DomainsView({
                   <small>Sources</small>
                 </span>
                 <span>
-                  <strong>{domain.isSample ? 15 : sourceCount ? 1 : 0}</strong>
+                  <strong>{domain.isSample ? 15 : "—"}</strong>
                   <small>Entities</small>
                 </span>
                 <span>
-                  <strong>{domain.isSample ? 11 : 0}</strong>
+                  <strong>{domain.isSample ? 11 : "—"}</strong>
                   <small>Metrics</small>
                 </span>
                 <span>
-                  <strong>{domain.isSample ? "82/82" : sourceCount ? "Draft" : "—"}</strong>
+                  <strong>{domain.isSample ? "82/82" : domain.status === "ready" ? "Published" : "Draft"}</strong>
                   <small>Contract</small>
                 </span>
               </div>
@@ -1854,6 +1900,7 @@ function OverviewView({
   runQuery,
   openSources,
   openSemantic,
+  openAsk,
   openRuns,
   connection,
   runs,
@@ -1864,6 +1911,7 @@ function OverviewView({
   runQuery: (value?: string) => Promise<void>;
   openSources: () => void;
   openSemantic: () => void;
+  openAsk: () => void;
   openRuns: () => void;
   connection: ConnectionState;
   runs: RunRecord[];
@@ -1883,12 +1931,11 @@ function OverviewView({
             </h1>
             <p>
               This domain is isolated from every other business context.
-              Complete the source and semantic contract steps to activate
-              governed analysis.
+              {domain.status === "ready" ? "Its published data and semantic contract are ready for governed analysis." : "Complete the source and semantic contract steps to activate governed analysis."}
             </p>
             <div className="onboarding-actions">
-              <button className="primary-button" onClick={openSources}>
-                Add domain data →
+              <button className="primary-button" onClick={domain.status === "ready" ? openAsk : openSources}>
+                {domain.status === "ready" ? "Ask & Analyze →" : "Add domain data →"}
               </button>
               <button className="secondary-button" onClick={openSemantic}>
                 Open semantic studio
@@ -1900,8 +1947,8 @@ function OverviewView({
             {[
               ["Data domain created", true],
               ["Source profiled", domain.sourceCount > 0],
-              ["Semantic contract reviewed", false],
-              ["Execution connector ready", false],
+              ["Semantic contract reviewed", domain.status === "ready"],
+              ["Execution connector ready", domain.status === "ready"],
             ].map(([label, complete], index) => (
               <div key={String(label)} className={cn(complete && "complete")}>
                 <span>{complete ? "✓" : index + 1}</span>
@@ -1921,24 +1968,24 @@ function OverviewView({
           />
           <MetricCard
             label="Semantic entities"
-            value={domain.sourceCount ? "1 draft" : "0"}
-            detail="Human review required"
+            value="—"
+            detail="Count not loaded"
             trend="Domain isolated"
             icon="⌘"
             onClick={openSemantic}
           />
           <MetricCard
             label="Business metrics"
-            value="0"
-            detail="Define after profiling"
+            value="—"
+            detail="Count not loaded"
             trend="No borrowed meaning"
             icon="ƒ"
             onClick={openSemantic}
           />
           <MetricCard
             label="Contract status"
-            value="Draft"
-            detail="Blocking until published"
+            value={domain.status === "ready" ? "Published" : "Draft"}
+            detail={domain.status === "ready" ? "Executable version available" : "Blocking until published"}
             trend="Safe by default"
             icon="◇"
             onClick={openSemantic}
@@ -1949,7 +1996,7 @@ function OverviewView({
           <div>
             <span className="panel-kicker">NEXT BEST ACTION</span>
             <h2>
-              {domain.sourceCount
+              {domain.status === "ready" ? "Ask a governed question" : domain.sourceCount
                 ? "Finish the semantic contract"
                 : "Upload the first domain-owned source"}
             </h2>
@@ -1961,9 +2008,9 @@ function OverviewView({
           </div>
           <button
             className="primary-button"
-            onClick={domain.sourceCount ? openSemantic : openSources}
+            onClick={domain.status === "ready" ? openAsk : domain.sourceCount ? openSemantic : openSources}
           >
-            Continue setup →
+            {domain.status === "ready" ? "Ask & Analyze →" : "Continue setup →"}
           </button>
         </section>
       </div>
@@ -2335,7 +2382,7 @@ function SourcesView({
           <strong>
             {domain.isSample ? "Connect another source" : "Add the first domain source"}
           </strong>
-          <p>SQLite, CSV, or Parquet</p>
+          <p>CSV or Parquet</p>
           <span className="tiny-label">SEMANTICS REQUIRED</span>
         </button>
       </div>
@@ -2376,7 +2423,7 @@ function SourcesView({
                     {source.type} · {source.size}
                   </span>
                 </div>
-                <span className="status-pill success">{source.status}</span>
+                <span className={`status-pill ${source.status === "Ready" ? "success" : "neutral"}`}>{source.status}</span>
               </div>
             ))}
           </div>
@@ -3100,7 +3147,7 @@ function AskView({
   selectRun: (run: RunRecord) => void;
   connection: ConnectionState;
 }) {
-  if (!domain.isSample) {
+  if (!domain.isSample && domain.status !== "ready") {
     return (
       <div className="page domain-analysis-page">
         <PageHeader
@@ -3859,6 +3906,7 @@ function UploadModal({
   step,
   files,
   isProfiling,
+  sourceProfile,
   reviewed,
   validated,
   semanticDraft,
@@ -3877,6 +3925,7 @@ function UploadModal({
   step: number;
   files: File[];
   isProfiling: boolean;
+  sourceProfile: SourceProfile | null;
   reviewed: boolean;
   validated: boolean;
   semanticDraft: SemanticDraft;
@@ -3946,7 +3995,7 @@ function UploadModal({
               onClick={() => fileInputRef.current?.click()}
             >
               <span className="upload-cloud">↑</span>
-              <strong>Drop SQLite, CSV, or Parquet files here</strong>
+              <strong>Drop CSV or Parquet files here</strong>
               <p>or click to browse · up to 25 MB per file</p>
               <span className="browse-button">Choose files</span>
             </button>
@@ -3996,10 +4045,10 @@ function UploadModal({
             <div className="profile-success">
               <span>✓</span>
               <div>
-                <strong>Physical profile complete</strong>
+                <strong>Source sample inspected</strong>
                 <p>
-                  QueryForge inferred a draft only. Business definitions still
-                  require human review.
+                  CSV fields and bounded sample values are shown below. Keys and
+                  business definitions require review; publication performs full validation.
                 </p>
               </div>
             </div>
@@ -4009,16 +4058,16 @@ function UploadModal({
                 <strong>{Math.max(files.length, 1)}</strong>
               </div>
               <div>
-                <span>Candidate grain</span>
-                <strong>record_id</strong>
+                <span>Sample rows</span>
+                <strong>{sourceProfile?.sampledRows ?? 0}</strong>
               </div>
               <div>
-                <span>Dimensions</span>
-                <strong>7</strong>
+                <span>Observed columns</span>
+                <strong>{sourceProfile?.columns.length ?? 0}</strong>
               </div>
               <div>
                 <span>Quality warnings</span>
-                <strong className="warning-text">2</strong>
+                <strong className="warning-text">{sourceProfile?.warnings.length ?? 0}</strong>
               </div>
             </div>
             <div className="profile-table-preview">
@@ -4028,19 +4077,15 @@ function UploadModal({
                 <span>Semantic role</span>
                 <span>Quality</span>
               </div>
-              {[
-                ["record_id", "INTEGER", "Primary key", "Unique"],
-                ["entity_id", "INTEGER", "Entity key", "99.9%"],
-                ["recorded_at", "TIMESTAMP", "Time dimension", "100%"],
-                ["amount", "DECIMAL", "Candidate measure", "2 outliers"],
-              ].map((row) => (
-                <div key={row[0]}>
-                  {row.map((cell, index) => (
+              {(sourceProfile?.columns ?? []).map((column, rowIndex) => (
+                <div key={`${column.name}-${rowIndex}`}>
+                  {[column.name, column.type, "Unreviewed", `${column.nulls} empty in sample`].map((cell, index) => (
                     <span key={index}>{cell}</span>
                   ))}
                 </div>
               ))}
             </div>
+            {sourceProfile?.warnings.map(warning => <p key={warning}>{warning}</p>)}
             <div className="upload-modal-footer">
               <button className="secondary-button" onClick={() => setStep(1)}>
                 ← Back
@@ -4175,14 +4220,44 @@ function UploadModal({
                   <span>Draft metrics</span>
                   <strong>{semanticDraft.metrics.length}</strong>
                 </div>
-                <div>
-                  <span>Quality rules</span>
-                  <strong>6</strong>
-                </div>
-                {semanticDraft.metrics.map((metric) => (
-                  <code key={metric.name}>{metric.name}</code>
-                ))}
               </div>
+              <label>
+                <span>Dimensions (comma separated column names)</span>
+                <input value={semanticDraft.dimensions.join(", ")} onChange={event => {
+                  setSemanticDraft(current => ({ ...current, dimensions: event.target.value.split(",").map(value => value.trim()) }));
+                  setReviewed(false); resetValidation();
+                }} />
+              </label>
+              <p>Review every metric. Expressions must use qualified table.column references; the publication table is derived from the business entity name.</p>
+              {semanticDraft.metrics.map((metric, index) => (
+                <fieldset key={index} className="semantic-contract-fields">
+                  <legend>Metric {index + 1}</legend>
+                  {(["name", "description", "expression"] as const).map(field => (
+                    <label key={field}>
+                      <span>{field}</span>
+                      <input aria-label={`Metric ${index + 1} ${field}`} value={metric[field]} onChange={event => {
+                        setSemanticDraft(current => ({ ...current, metrics: current.metrics.map((item, i) => i === index ? { ...item, [field]: event.target.value } : item) }));
+                        setReviewed(false); resetValidation();
+                      }} />
+                    </label>
+                  ))}
+                  <label>
+                    <span>Aggregation</span>
+                    <select aria-label={`Metric ${index + 1} aggregation`} value={metric.aggregation} onChange={event => {
+                      setSemanticDraft(current => ({ ...current, metrics: current.metrics.map((item, i) => i === index ? { ...item, aggregation: event.target.value as SemanticDraft["metrics"][number]["aggregation"] } : item) }));
+                      setReviewed(false); resetValidation();
+                    }}><option>count</option><option>sum</option><option>ratio</option></select>
+                  </label>
+                  <button className="secondary-button" disabled={semanticDraft.metrics.length < 2} onClick={() => {
+                    setSemanticDraft(current => ({ ...current, metrics: current.metrics.filter((_, i) => i !== index) }));
+                    setReviewed(false); resetValidation();
+                  }}>Remove metric</button>
+                </fieldset>
+              ))}
+              <button className="secondary-button" onClick={() => {
+                setSemanticDraft(current => ({ ...current, metrics: [...current.metrics, { name: "", description: "", aggregation: "count", expression: "" }] }));
+                setReviewed(false); resetValidation();
+              }}>Add metric</button>
             </div>
             <label className="review-checkbox">
               <input
@@ -4209,7 +4284,7 @@ function UploadModal({
                 disabled={!reviewed}
                 onClick={() => void validateSemantic()}
               >
-                {validated ? "✓ Contract validated" : "Run contract checks"}
+                {validated ? "✓ Draft fields checked" : "Check draft fields"}
               </button>
               <div>
                 <span
@@ -4219,7 +4294,7 @@ function UploadModal({
                   )}
                 />
                 {validated
-                  ? "All blocking checks passed"
+                  ? "Draft fields checked; publication validation pending"
                   : "Validation required"}
               </div>
             </div>

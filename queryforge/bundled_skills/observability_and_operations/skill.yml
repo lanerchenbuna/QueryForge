@@ -3,3 +3,4 @@ description: Define freshness, volume, failure, lineage, and recovery signals fo
 allowed_nodes: [plan_mode, reflect, fix]
 enabled: false
 priority: 55
+selection_keywords: ["alert", "monitor", "failure rate", "告警"]

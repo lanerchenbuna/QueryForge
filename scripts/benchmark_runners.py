@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
+from functools import partial
 from pathlib import Path
 import time
 from uuid import uuid4
@@ -40,7 +41,9 @@ def run_workflow_task(spec, dataset: dict, context) -> dict:
                   semantic_model_path=dataset["semantic_model"], sql_policy_path=dataset["sql_policy"],
                   today_provider=lambda: date(2024, 12, 31), show_run_summary=True,
                   max_retries=0 if "fix_loop" in context.ablations else 2,
-                  parallel_candidates=1 if "multi_candidate" in context.ablations else 2 if context.provider else 1)
+                  parallel_candidates=1 if "multi_candidate" in context.ablations else
+                      context.parallel_candidates if context.parallel_candidates is not None else 2 if context.provider else 1,
+                  selected_skills=[] if context.skill_mode == "off" else None)
     if not context.provider:
         kwargs["llm_factory"] = lambda _: ScriptedModel(spec.reference_sql)
     started = time.perf_counter()
@@ -53,8 +56,12 @@ def run_workflow_task(spec, dataset: dict, context) -> dict:
             from queryforge.application import AgentService, AgentOptions
             options = AgentOptions(database=dataset["database"], semantic_model_path=dataset["semantic_model"],
                                    sql_policy_path=dataset["sql_policy"], session_id="eval-session", complexity_mode="simple",
-                                   history_top_k=0, show_run_summary=True, orchestration_state_root=str(context.state_root/'runs'))
-            service_kwargs = {"config_loader": lambda **_: config}
+                                   history_top_k=0, show_run_summary=True, orchestration_state_root=str(context.state_root/'runs'),
+                                   enable_vector_kb=False, vector_top_k=0, max_retries=kwargs["max_retries"],
+                                   parallel_candidates=kwargs["parallel_candidates"],
+                                   skills=kwargs["selected_skills"])
+            service_kwargs = {"config_loader": lambda **_: config,
+                              "runner_factory": partial(WorkflowRunner, today_provider=kwargs["today_provider"])}
             if not context.provider:
                 service_kwargs["llm_factory"] = lambda _: ScriptedModel(spec.reference_sql)
             service = AgentService(**service_kwargs)

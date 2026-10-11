@@ -3,3 +3,4 @@ description: Design idempotent transformations with explicit dependencies, stage
 allowed_nodes: [plan_mode, gen_sql, reflect, fix]
 enabled: false
 priority: 70
+selection_keywords: ["backfill", "idempotent", "pipeline", "transform", "回填"]

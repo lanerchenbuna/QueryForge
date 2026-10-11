@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Literal, Mapping, Sequence
 
@@ -30,8 +31,11 @@ from queryforge.core.observability import (
     stable_digest,
 )
 from queryforge.domain.semantic.model import SemanticModelLoader
-from queryforge.domain.semantic.schemas import MetricMatch
-from queryforge.domain.semantic.sql_validator import QuerySpec, QuerySpecCompiler
+from queryforge.domain.semantic.query_constraints import UnsupportedConstraint, require_filter_predicates
+from queryforge.domain.analysis.diagnostics import reconcile_buckets
+from queryforge.domain.semantic.periods import baseline_day, label_date, period_label, period_bounds, require_complete_period
+from queryforge.domain.semantic.schemas import MetricMatch, MetricTimeContract
+from queryforge.domain.semantic.sql_validator import QuerySpec, QuerySpecCompiler, SemanticSQLValidator
 from queryforge.orchestration.planner.plan import (
     LOCAL_ACTIONS,
     AnalysisPlan,
@@ -609,7 +613,7 @@ class AnalysisExecutor:
         record = self.journal.step(step_id)
         if record is None or not record.reusable():
             return False
-        kind = EVIDENCE_KINDS.get(step.action, step.action)
+        kind = self._evidence_kind(step)
         outputs = dict(record.outputs or {})
         if step.action not in LOCAL_ACTIONS:
             evidence_id = (
@@ -897,10 +901,11 @@ class AnalysisExecutor:
                 state.blocked_reason = str(exc)
         else:
             result.outputs = outputs
-            evidence_id = context.evidence_id(EVIDENCE_KINDS.get(step.action, step.action))
+            kind = self._evidence_kind(step)
+            evidence_id = context.evidence_id(kind)
             if step.action not in LOCAL_ACTIONS:
                 state.record_evidence(
-                    step, evidence_id, EVIDENCE_KINDS.get(step.action, step.action), outputs
+                    step, evidence_id, kind, outputs
                 )
                 result.evidence_ids = [evidence_id]
             elif outputs.get("answer") is not None:
@@ -949,6 +954,12 @@ class AnalysisExecutor:
             )
 
     # ------------------------------------------------------------- dispatch
+
+    @staticmethod
+    def _evidence_kind(step: PlanStep) -> str:
+        if step.action == "query_metric" and step.inputs.get("result_role") == "metric_totals":
+            return "metric_totals"
+        return EVIDENCE_KINDS.get(step.action, step.action)
 
     def _dispatch(
         self,
@@ -1005,24 +1016,55 @@ class AnalysisExecutor:
             if not observation.ok:
                 raise self._error_for_observation(observation)
             return dict(observation.result or {})
-        params = self._assemble_step11(action, step, state)
-        observation = self._execute_tool(tool, params, context=context, step=step)
+        dataset = state.evidence_payload(step.inputs.get("dataset_kind") or "metric_value") or {}
+        if action in {"compare_periods", "calculate_contribution", "detect_anomaly"} and len(dataset.get("metrics", [])) > 1:
+            collections = {}
+            for name in dataset["metrics"]:
+                collections[name] = self._computed_payload(action, step, context, state, {**dataset, "metric": name})
+            key = {"compare_periods": "comparisons", "calculate_contribution": "by_metric", "detect_anomaly": "by_metric"}[action]
+            payload = {**collections[dataset["metrics"][0]], "metrics": dataset["metrics"], key: collections,
+                       "period_completeness": dataset.get("period_completeness", "unverified")}
+            if step.inputs.get("comparison_baseline"):
+                payload["comparison_baseline"] = step.inputs["comparison_baseline"]
+            return payload
+        return self._computed_payload(action, step, context, state, dataset)
+
+    def _computed_payload(self, action, step, context, state, dataset):
+        params = self._assemble_step11(action, step, state, dataset_override=dataset)
+        reconciliation = params.pop("_reconciliation", None)
+        observation = self._execute_tool(self._tool_for(action), params, context=context, step=step)
         if not observation.ok:
             raise self._error_for_observation(observation)
         payload = dict(observation.result or {})
+        if action == "compare_periods" and step.inputs.get("comparison_baseline"):
+            payload["comparison_baseline"] = step.inputs["comparison_baseline"]
+            metadata = dataset.get("metric_contracts", {}).get(dataset.get("metric"), {})
+            payload["period_completeness"] = "complete" if (metadata.get("time") or {}).get("require_complete_periods") else "unverified"
+        if action == "calculate_contribution":
+            if payload.get("undefined_reason") or not payload.get("residual_explained"):
+                raise UnsupportedAnalysisError("unverified_reconciliation: contribution tool could not reconcile the total change")
+            if reconciliation:
+                payload.update({key: value for key, value in reconciliation.items() if key != "buckets"})
+                payload["source_evidence_ids"] = state.evidence_ids_for(["metric_value", "metric_totals", "period_comparison"])
+                payload["category_dimensions"] = [bucket["dimensions"] for bucket in reconciliation["buckets"]]
         payload.setdefault("method", payload.get("method"))
         payload.setdefault("parameters", {"assembled": True, **{k: v for k, v in params.items() if k not in {"series", "buckets", "rows"}}})
         return payload
 
     def _assemble_step11(
-        self, action: str, step: PlanStep, state: "_ExecutionState"
+        self, action: str, step: PlanStep, state: "_ExecutionState", *, dataset_override=None,
     ) -> dict[str, Any]:
         knobs = dict(step.validation.get("knobs") or {})
-        dataset = state.evidence_payload("metric_value") or {}
+        dataset = dataset_override if dataset_override is not None else (state.evidence_payload("metric_value") or {})
         resolution = state.evidence_payload("metric_resolution") or {}
         metric_kind = self._metric_kind(resolution)
         if action == "compare_periods":
             self._require_single_series_dimension(action, dataset)
+            query_limit = (dataset.get("query_spec") or {}).get("limit")
+            if step.inputs.get("comparison_baseline") and (
+                dataset.get("truncated") or (query_limit and len(dataset.get("rows") or []) >= query_limit)
+            ):
+                raise UnsupportedAnalysisError("unsupported_baseline: bounded series cannot prove the latest period")
             series = self._series(dataset)
             if len(series) < 2:
                 raise DataAbsentError(
@@ -1034,16 +1076,31 @@ class AnalysisExecutor:
             self._require_ordered_time_series(
                 action, [str(point["period"]) for point in series]
             )
+            current, baseline = self._comparison_pair(
+                series, step.inputs.get("comparison_baseline"), step.inputs.get("time_grain") or dataset.get("time_grain"), dataset=dataset,
+            )
             return {
-                "current": series[-1]["value"],
-                "baseline": series[-2]["value"],
-                "label": f"{series[-2]['period']} -> {series[-1]['period']}",
+                "current": current["value"],
+                "baseline": baseline["value"],
+                "label": f"{baseline['period']} -> {current['period']}",
+                "unit": (dataset.get("metric_contracts", {}).get(dataset.get("metric"), {}) or {}).get("unit"),
                 # Explicit values: schema validation may materialise omitted
                 # optional parameters as None, which would override the tool's
                 # own defaults.
                 "method": str(knobs.get("method") or "absolute_relative"),
             }
         if action == "drill_down":
+            analysis = resolution.get("analysis") or {}
+            if analysis.get("additivity_proof") == "unique_row_identity":
+                checks = (state.evidence_payload("data_quality") or {}).get("checks", [])
+                if not any(c.get("check") == "grain_unique" and c.get("status") == "ok"
+                           and c.get("table") == resolution.get("table") for c in checks):
+                    raise UnsupportedAnalysisError("unverified_additivity: row identity uniqueness was not proven")
+            if (analysis.get("additivity") == "non_additive" or any(
+                dimension in analysis.get("non_additive_dimensions", [])
+                for dimension in dataset.get("dimensions", [])
+            )):
+                raise UnsupportedAnalysisError("unsupported_additivity: bucket totals cannot be summed for this metric")
             buckets = self._buckets(dataset)
             if not buckets:
                 raise DataAbsentError("data_absent: no categorical buckets to drill into")
@@ -1058,23 +1115,44 @@ class AnalysisExecutor:
                 params["dimension"] = knobs["dimension"]
             return params
         if action == "calculate_contribution":
-            contribution = self._contribution_buckets(dataset)
-            if contribution is None:
-                raise DataAbsentError(
-                    "data_absent: contribution needs per-category values for two "
-                    "comparable periods in one result"
-                )
+            metadata = dataset.get("metric_contracts", {}).get(dataset.get("metric"), {})
+            if metadata.get("additivity") != "additive":
+                raise UnsupportedAnalysisError("unsupported_additivity: this metric cannot be decomposed by summing buckets")
+            if metadata.get("additivity_proof") == "unique_row_identity":
+                spec = dataset.get("query_spec") or {}
+                checks = list((state.evidence_payload("data_quality") or {}).get("checks", []))
+                checks.extend(c for audit in spec.get("grain_checks", []) for c in audit.get("checks", []))
+                sources = [table for table, _ in spec.get("source_grains", [])]
+                if not sources or not all(any(c.get("check") == "grain_unique" and c.get("status") == "ok"
+                           and c.get("table") == table for c in checks) for table in sources):
+                    raise UnsupportedAnalysisError("unverified_additivity: row identity uniqueness was not proven")
+            totals = state.evidence_payload("metric_totals") or {}
+            comparison = state.evidence_payload("period_comparison") or {}
+            comparison = comparison.get("comparisons", {}).get(dataset.get("metric"), comparison)
+            periods = str(comparison.get("label") or "").split(" -> ")
+            if len(periods) != 2:
+                raise UnsupportedAnalysisError("unverified_reconciliation: an independently compared pair is required")
+            try:
+                contribution = reconcile_buckets(dataset, totals, dataset["metric"], periods[1], periods[0])
+            except ValueError as exc:
+                raise UnsupportedAnalysisError(str(exc)) from exc
             return {
-                "buckets": contribution["buckets"],
-                "metric_kind": metric_kind,
+                "buckets": [{k: v for k, v in bucket.items() if k != "dimensions"} for bucket in contribution["buckets"]],
+                "metric_kind": "additive",
                 "expected_total_delta": contribution.get("expected_total_delta"),
                 "additive": True,
+                "_reconciliation": contribution,
+                "unit": metadata.get("unit"),
             }
         if action == "detect_anomaly":
             self._require_single_series_dimension(action, dataset)
+            query_limit = (dataset.get("query_spec") or {}).get("limit")
+            if dataset.get("truncated") or (query_limit and len(dataset.get("rows") or []) >= query_limit):
+                raise UnsupportedAnalysisError("unverified_anomaly: bounded series")
             series = self._series(dataset)
             if not series:
                 raise DataAbsentError("data_absent: no ordered series to analyse")
+            self._require_ordered_time_series(action, [str(point["period"]) for point in series])
             return {
                 "series": series,
                 "method": str(knobs.get("method") or "baseline_deviation"),
@@ -1082,10 +1160,15 @@ class AnalysisExecutor:
                 "seasonality": str(knobs.get("seasonality") or "none"),
                 "missing": str(knobs.get("missing") or "skip"),
                 "threshold": float(knobs.get("threshold") or 2.0),
+                "unit": dataset.get("metric_contracts", {}).get(dataset.get("metric"), {}).get("unit"),
             }
         if action == "render_chart":
             rows = list(dataset.get("rows") or [])
             columns = [str(column) for column in (dataset.get("columns") or [])]
+            audit = {name + suffix for name in dataset.get("metrics", []) for suffix in ("__numerator", "__denominator")}
+            indexes = [i for i, column in enumerate(columns) if column not in audit]
+            rows = [[row[i] for i in indexes] for row in rows]
+            columns = [columns[i] for i in indexes]
             if not rows or not columns:
                 raise DataAbsentError("data_absent: no result rows to chart")
             return {
@@ -1099,11 +1182,70 @@ class AnalysisExecutor:
         )
 
     @staticmethod
+    def _comparison_pair(series, baseline, grain, dataset=None):
+        if not baseline:
+            return series[-1], series[-2]  # historical hand-authored plans
+        current = series[-1]
+        label = str(current["period"])
+        metadata = ((dataset or {}).get("metric_contracts") or {}).get((dataset or {}).get("metric"), {})
+        temporal = MetricTimeContract.model_validate(metadata["time"]) if metadata.get("time") else None
+        if grain:
+            try:
+                requested = ((dataset or {}).get("query_spec") or {}).get("requested_ranges", [])
+                if requested:
+                    expected_current = period_label(date.fromisoformat(max(span[1] for span in requested)), grain, temporal)
+                    if label != expected_current:
+                        raise DataAbsentError(f"data_absent: requested current period {expected_current} is missing")
+                require_complete_period(label, grain, temporal, requested)
+                expected = period_label(baseline_day(label_date(label), baseline, grain), grain, temporal)
+                match = next((point for point in series if str(point["period"]) == expected), None)
+                if match is None:
+                    raise DataAbsentError(f"data_absent: requested baseline {baseline!r} ({expected}) is missing")
+                require_complete_period(expected, grain, temporal)
+                return current, match
+            except UnsupportedConstraint as exc:
+                raise UnsupportedAnalysisError(str(exc)) from exc
+        if not grain:
+            grain = ("daily" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", label)
+                     else "monthly" if re.fullmatch(r"\d{4}-\d{2}", label)
+                     else "quarterly" if re.fullmatch(r"\d{4}-Q[1-4]", label)
+                     else "yearly" if re.fullmatch(r"\d{4}", label) else None)
+        position = _calendar_position(label)
+        if grain is None or position is None or position[0] == 0:
+            raise UnsupportedAnalysisError("unsupported_baseline: dated calendar periods are required")
+        year, month = position
+        expected = None
+        if baseline in {"same_period_last_year", "previous_year"}:
+            expected = str(year - 1) + label[4:]
+        elif baseline in {"previous_period", "previous_month", "previous_quarter"}:
+            if baseline == "previous_month" and grain != "monthly":
+                raise UnsupportedAnalysisError("unsupported_baseline: previous_month requires monthly grain")
+            if baseline == "previous_quarter" and grain != "quarterly":
+                raise UnsupportedAnalysisError("unsupported_baseline: previous_quarter requires quarterly grain")
+            if grain == "daily":
+                expected = (date.fromisoformat(label) - timedelta(days=1)).isoformat()
+            elif grain in {"monthly", "quarterly"}:
+                previous = year * 12 + month - 1 - (3 if grain == "quarterly" else 1)
+                previous_year, previous_month = divmod(previous, 12)
+                expected = (f"{previous_year:04d}-Q{previous_month // 3 + 1}" if grain == "quarterly"
+                            else f"{previous_year:04d}-{previous_month + 1:02d}")
+            elif grain == "yearly":
+                expected = str(year - 1)
+        else:
+            raise UnsupportedAnalysisError(f"unsupported_baseline: {baseline!r}")
+        match = next((point for point in series if str(point["period"]) == expected), None)
+        if match is None:
+            raise DataAbsentError(f"data_absent: requested baseline {baseline!r} ({expected}) is missing")
+        return current, match
+
+    @staticmethod
     def _metric_kind(resolution: dict[str, Any]) -> str:
         aggregation = str(resolution.get("aggregation") or "sum").casefold()
         if aggregation in {"ratio", "average", "avg"}:
             return "ratio"
         if aggregation in {"count_distinct", "distinct"}:
+            return "distinct"
+        if (resolution.get("analysis") or {}).get("additivity") == "non_additive":
             return "distinct"
         return "additive"
 
@@ -1162,6 +1304,14 @@ class AnalysisExecutor:
         alphabetically re-ordered series — cannot pass it.
         """
 
+        if all(re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(label)) for label in labels):
+            try:
+                positions = [date.fromisoformat(str(label)).toordinal() for label in labels]
+            except ValueError as exc:
+                raise UnsupportedAnalysisError("unsupported_grain: invalid calendar date") from exc
+            if all(current > previous for previous, current in zip(positions, positions[1:])):
+                return
+            raise UnsupportedAnalysisError("unsupported_grain: daily series is not in time order")
         positions = [_calendar_position(label) for label in labels]
         if any(position is None for position in positions):
             unlabelled = [
@@ -1199,7 +1349,8 @@ class AnalysisExecutor:
         rows = list(dataset.get("rows") or [])
         if len(columns) < 2:
             return []
-        value_index = cls._numeric_index(columns, rows)
+        value_index = (columns.index(dataset["metric"]) if dataset.get("metric") in columns
+                       else cls._numeric_index(columns, rows))
         if value_index is None:
             return []
         label_index = next(
@@ -1357,6 +1508,7 @@ class AnalysisExecutor:
             "entity": metric.entity,
             "table": entity.table if entity else None,
             "expression": metric.expression,
+            "analysis": QuerySpecCompiler._analysis_metadata(metric, entity),
             "time_field": metric.time_field,
             "declared_dimensions": dimensions,
             "legal_dimensions": legal,
@@ -1402,16 +1554,28 @@ class AnalysisExecutor:
         ]
         limit = int(step.inputs.get("limit") or 100)
         explicit_sql = step.inputs.get("sql")
+        metric_ids = list(step.inputs.get("metric_ids") or [metric_name])
+        filters = [str(item["expression"]) for item in (step.inputs.get("filters") or [])]
         spec: QuerySpec | None = None
         if explicit_sql:
+            governed = context.semantic_model.model if context.semantic_model else None
+            if governed and any(m.ratio for m in governed.metrics if m.name in metric_ids):
+                raise UnsupportedAnalysisError("unsupported_request: explicit SQL cannot prove declared ratio components")
+            if (filters or len(metric_ids) > 1 or step.inputs.get("time_grain")
+                    or getattr(context, "date_context", None)):
+                raise UnsupportedAnalysisError("unsupported_request: explicit SQL cannot prove these request constraints")
             sql = str(explicit_sql)
             degraded, degraded_reason = False, None
         else:
-            spec = self._compile_spec(context, str(metric_name or ""), dimensions, limit, resolution)
+            spec = self._compile_spec(
+                context, str(metric_name or ""), dimensions, limit, resolution,
+                metric_ids=metric_ids, user_filters=filters, time_grain=step.inputs.get("time_grain"),
+                comparison_baseline=step.inputs.get("comparison_baseline"),
+            )
             if spec is not None:
                 sql = spec.sql
                 degraded, degraded_reason = False, None
-            elif dimensions:
+            elif dimensions or filters or len(metric_ids) > 1 or step.inputs.get("time_grain"):
                 # A breakdown was requested and no governed query could be
                 # compiled for it: a raw preview would answer a different
                 # question, so the step fails instead of reporting success.
@@ -1422,6 +1586,51 @@ class AnalysisExecutor:
             else:
                 return self._query_metric_fallback(step, context, state, result, resolution)
 
+        try:
+            require_filter_predicates(sql, filters, metric_ctes=spec.evidence.get("metric_ctes") if spec else None)
+        except UnsupportedConstraint as exc:
+            raise UnsupportedAnalysisError(str(exc)) from exc
+        if spec:
+            for metadata in spec.evidence.get("metric_contracts", {}).values():
+                temporal = metadata.get("time") or {}
+                if temporal.get("require_complete_periods"):
+                    first, last = date.fromisoformat(temporal["coverage_start"]), date.fromisoformat(temporal["complete_through"])
+                    for start, end in spec.evidence.get("requested_ranges", []):
+                        start_day, end_day = date.fromisoformat(start), date.fromisoformat(end)
+                        if end_day < first or start_day > last:
+                            raise DataAbsentError("data_absent: no value for the requested scope outside complete coverage")
+                        if start_day < first or end_day > last:
+                            raise UnsupportedAnalysisError("incomplete_period: requested window extends outside complete coverage")
+            if spec.evidence.get("metric_ctes"):
+                selected = [MetricMatch(matched_term=name, metric=next(m for m in context.semantic_model.model.metrics if m.name == name)) for name in metric_ids]
+                verdict = SemanticSQLValidator(context.semantic_model, selected, requested_dimensions=dimensions,
+                    date_context=getattr(context, "date_context", None), time_grain=spec.time_grain,
+                    comparison_baseline=step.inputs.get("comparison_baseline"), user_filters=filters).validate(sql)
+                if verdict.status != "passed":
+                    raise UnsupportedAnalysisError(verdict.error_message())
+            for validation_sql in spec.evidence.get("time_validations", []):
+                observation = self._execute_sql("execute_sql", validation_sql, context=context, step=step)
+                payload = dict(observation.result or {})
+                if not observation.ok or payload.get("rows") != [[0]]:
+                    raise UnsupportedAnalysisError("unverified_time_values: metric event dates violate the time contract")
+                spec.evidence.setdefault("time_checks", []).append({"sql": validation_sql, "invalid_dates": 0})
+            # Check the actual join target, not merely the author's declaration.
+            # Unknown/denied checks fail closed. All SQL remains inside DatabaseTool.
+            checks = [(table, [column]) for table, column in spec.evidence.get("join_keys", [])]
+            checks += [(table, grain) for table, grain in spec.evidence.get("source_grains", []) if table != spec.base_table]
+            for table, grain in dict.fromkeys((table, tuple(grain)) for table, grain in checks):
+                unique = self._execute_tool("check_data_quality", {
+                    "table_name": table, "checks": ["grain_unique"],
+                    "options": {"grain_columns": list(grain)},
+                }, context=context, step=step)
+                check = dict(unique.result or {})
+                spec.evidence.setdefault("grain_checks", []).append(check)
+                if unique.ok and any(c.get("reason") == "empty_table" for c in check.get("checks", [])):
+                    suggestions = state.note_missing_dimension(metric_name, dimensions, resolution)
+                    raise DataAbsentError(_with_alternative_dimensions(
+                        f"data_absent: join population {table!r} is empty for dimensions {dimensions}", suggestions))
+                if not unique.ok or check.get("status") != "ok":
+                    raise UnsupportedAnalysisError(f"unverified_join_grain: {table}.{grain} is not proven unique")
         observation = self._execute_sql("execute_sql", sql, context=context, step=step)
         if not observation.ok:
             if observation.error_category == WorkflowErrorCategory.budget.value:
@@ -1430,6 +1639,8 @@ class AnalysisExecutor:
         payload = dict(observation.result or {})
         rows = list(payload.get("rows") or [])
         columns = list(payload.get("columns") or [])
+        if spec is not None and not set(metric_ids).issubset(columns):
+            raise UnsupportedAnalysisError("request_incomplete: result is missing requested metric columns")
         if not rows:
             suggestions = state.note_missing_dimension(
                 metric_name, dimensions, resolution
@@ -1441,9 +1652,15 @@ class AnalysisExecutor:
                     suggestions,
                 )
             )
+        values = ({name: rows[0][columns.index(name)] for name in metric_ids}
+                  if spec and not dimensions and len(rows) == 1 else {})
+        if any(value is None for value in values.values()):
+            raise DataAbsentError("data_absent: a requested metric has no value for the requested scope (absent data or zero denominator)")
+        if spec and any(row[columns.index(name)] is None for row in rows for name in metric_ids):
+            raise DataAbsentError("unverified_measure: a group is absent or has a zero denominator; no complete answer can be claimed")
         value = None
-        if len(rows) == 1 and len(columns) == 1:
-            value = rows[0][0]
+        if len(rows) == 1 and ((spec and not dimensions and len(metric_ids) == 1) or len(columns) == 1):
+            value = rows[0][columns.index(metric_ids[0])] if spec else rows[0][0]
             if value is None:
                 # A scalar aggregate is NULL when the requested scope has no rows
                 # ("watch hours in Q1 1990"). Reporting that as a successful answer
@@ -1461,6 +1678,12 @@ class AnalysisExecutor:
                 )
         prepared: dict[str, Any] = {
             "metric": metric_name,
+            "metrics": metric_ids,
+            "values": values,
+            "filters": list(spec.user_filters) if spec else [],
+            "time_grain": spec.time_grain if spec else None,
+            "time_filter": spec.time_filter if spec else None,
+            "truncated": observation.truncated,
             "aggregation": (spec.aggregation if spec else resolution.get("aggregation")),
             "sql": sql,
             "columns": columns,
@@ -1476,11 +1699,39 @@ class AnalysisExecutor:
                     "aggregation": spec.aggregation,
                     "base_table": spec.base_table,
                     "group_by": list(spec.group_by),
+                    "limit": spec.limit,
+                    **spec.evidence,
                 }
                 if spec
                 else None
             ),
+            "metric_contracts": spec.evidence.get("metric_contracts", {}) if spec else {},
+            "ratio_components": spec.evidence.get("ratio_components", {}) if spec else {},
+            "period_completeness": "unverified",
         }
+        if spec and spec.time_grain and dimensions and spec.evidence.get("time_dimension") == dimensions[0]:
+            metadatas = list(spec.evidence["metric_contracts"].values())
+            for metadata in metadatas:
+                temporal = MetricTimeContract.model_validate(metadata["time"]) if metadata.get("time") else None
+                if not temporal or not temporal.require_complete_periods:
+                    continue
+                requested = spec.evidence.get("requested_ranges", [])
+                try:
+                    labels = {str(row[0]) for row in rows}
+                    for label in labels:
+                        require_complete_period(label, spec.time_grain, temporal)
+                    for start, end in requested:
+                        cursor = period_bounds(date.fromisoformat(start), spec.time_grain, temporal)[0]
+                        while cursor <= date.fromisoformat(end):
+                            label = period_label(cursor, spec.time_grain, temporal)
+                            require_complete_period(label, spec.time_grain, temporal, requested)
+                            if label not in labels:
+                                raise DataAbsentError(f"data_absent: complete-period request is missing {label}")
+                            cursor = period_bounds(cursor, spec.time_grain, temporal)[1] + timedelta(days=1)
+                except UnsupportedConstraint as exc:
+                    raise UnsupportedAnalysisError(str(exc)) from exc
+            if all((metadata.get("time") or {}).get("require_complete_periods") for metadata in metadatas):
+                prepared["period_completeness"] = "complete"
         if degraded and degraded_reason:
             prepared["degraded_reason"] = degraded_reason
         return prepared
@@ -1543,6 +1794,11 @@ class AnalysisExecutor:
         dimensions: list[str],
         limit: int,
         resolution: dict[str, Any],
+        *,
+        metric_ids: list[str] | None = None,
+        user_filters: list[str] | None = None,
+        time_grain: str | None = None,
+        comparison_baseline: str | None = None,
     ) -> QuerySpec | None:
         """Compile the governed metric SQL, resolving dimension join paths.
 
@@ -1567,18 +1823,29 @@ class AnalysisExecutor:
         )
         if metric is None:
             return None
-        paths, problems = self._dimension_join_paths(
-            model_context, metric.entity, dimensions
-        )
+        selected = [next((m for m in model_context.model.metrics if m.name == name), None)
+                    for name in (metric_ids or [metric_name])]
+        if any(m is None for m in selected):
+            raise UnsupportedAnalysisError("unsupported_metric: an undeclared metric was requested")
+        paths, problems = [], []
+        for selected_metric in selected:
+            current_paths, current_problems = self._dimension_join_paths(
+                model_context, selected_metric.entity, dimensions
+            )
+            paths.extend(current_paths)
+            problems.extend(current_problems)
         if problems:
             raise UnsupportedAnalysisError("; ".join(problems))
         return QuerySpecCompiler.compile(
             semantic_model=model_context,
-            metric_matches=[MetricMatch(matched_term=metric_name, metric=metric)],
+            metric_matches=[MetricMatch(matched_term=m.name, metric=m) for m in selected],
             metric_join_paths=paths or None,
             requested_dimensions=dimensions,
             date_context=getattr(context, "date_context", None),
             limit=limit,
+            user_filters=user_filters,
+            time_grain=time_grain,
+            comparison_baseline=comparison_baseline,
         )
 
     def _dimension_join_paths(
@@ -1644,6 +1911,30 @@ class AnalysisExecutor:
             if not state.evidence_payload(str(kind)):
                 raise ValueError(f"missing_output: {kind}")
         metric_payload = state.evidence_payload("metric_value")
+        obligations = step.inputs.get("require_request") or {}
+        if obligations:
+            actual = metric_payload or {}
+            problems = []
+            if not set(obligations.get("metric_ids") or []).issubset(actual.get("metrics") or [actual.get("metric")]):
+                problems.append("metrics")
+            if not set(obligations.get("filters") or []).issubset(actual.get("filters") or []):
+                problems.append("filters")
+            if not set(obligations.get("dimensions") or []).issubset(actual.get("dimensions") or []):
+                problems.append("dimensions")
+            baseline = obligations.get("comparison_baseline")
+            if baseline and (state.evidence_payload("period_comparison") or {}).get("comparison_baseline") != baseline:
+                problems.append("comparison_baseline")
+            if obligations.get("time_grain") and actual.get("time_grain") != obligations["time_grain"]:
+                problems.append("time_grain")
+            if obligations.get("time_range") and not actual.get("time_filter"):
+                problems.append("time_range")
+            if obligations.get("diagnosis"):
+                contribution = state.evidence_payload("contribution") or {}
+                delivered = set(contribution.get("by_metric") or ([actual.get("metric")] if contribution else []))
+                if not set(obligations.get("metric_ids") or []).issubset(delivered) or not state.evidence_payload("metric_totals"):
+                    problems.append("diagnosis")
+            if problems:
+                raise ToolDenied("request_incomplete: " + ", ".join(problems), tool="compose_answer")
         resolution = state.evidence_payload("metric_resolution") or {}
         quality = state.evidence_payload("data_quality") or {}
         findings: list[dict[str, Any]] = []
@@ -1673,12 +1964,42 @@ class AnalysisExecutor:
             "question": state.plan.question,
             "findings": findings,
             "metric": metric_payload.get("metric") if metric_payload else None,
+            "metrics": metric_payload.get("metrics", [metric_payload.get("metric")]) if metric_payload else [],
+            "values": metric_payload.get("values", {}) if metric_payload else {},
+            "columns": metric_payload.get("columns", []) if metric_payload else [],
+            "metric_contracts": metric_payload.get("metric_contracts", {}) if metric_payload else {},
+            "ratio_components": metric_payload.get("ratio_components", {}) if metric_payload else {},
+            "period_completeness": metric_payload.get("period_completeness", "unverified") if metric_payload else "unverified",
             "value": metric_payload.get("value") if metric_payload else None,
             "rows": metric_payload.get("rows") if metric_payload else None,
+            "comparisons": (state.evidence_payload("period_comparison") or {}).get("comparisons", {}),
             "evidence_ids": state.evidence_ids_for(required),
             "limitations": self._limitations(metric_payload, quality),
             "degraded": bool(metric_payload and metric_payload.get("degraded")),
         }
+        for kind in ("period_comparison", "contribution", "anomaly"):
+            computed = state.evidence_payload(kind) or {}
+            parts = list(computed.get("by_metric", {}).values()) or [computed]
+            for part in parts:
+                answer["limitations"].extend(part.get("limitations") or [])
+                if part.get("undefined_reason"):
+                    answer["limitations"].append(f"{kind}: {part['undefined_reason']}")
+        answer["limitations"] = list(dict.fromkeys(answer["limitations"]))
+        contribution = state.evidence_payload("contribution")
+        if contribution:
+            answer["diagnosis"] = {
+                "interpretation": "arithmetic_decomposition_not_causal_attribution",
+                "comparison": state.evidence_payload("period_comparison"),
+                "contributions": contribution.get("by_metric") or {answer["metric"]: contribution},
+                "anomalies": (state.evidence_payload("anomaly") or {}).get("by_metric") or {
+                    answer["metric"]: state.evidence_payload("anomaly")},
+                "quality": {"status": quality.get("status"), "counts": quality.get("counts"),
+                            "time_checks": (metric_payload.get("query_spec") or {}).get("time_checks", []),
+                            "grain_checks": (metric_payload.get("query_spec") or {}).get("grain_checks", [])},
+                "period_completeness": answer["period_completeness"],
+                "evidence_ids": state.evidence_ids_for(["metric_value", "metric_totals", "data_quality",
+                                                       "period_comparison", "contribution", "anomaly"]),
+            }
         state.answer = answer
         payload: dict[str, Any] = {"answer": answer, "required_evidence": required}
         evidence_layer = (
@@ -1752,10 +2073,11 @@ class AnalysisExecutor:
                 Finding(
                     kind="metric",
                     statement=(
-                        f"{metric_payload.get('metric')} over "
+                        f"{', '.join(metric_payload.get('metrics') or [metric_payload.get('metric')])} over "
                         f"{', '.join(metric_payload.get('dimensions') or []) or 'the full set'}"
                     ),
-                    numbers={},
+                    numbers={name: None for name in metric_payload.get("values", {})}
+                    if len(metric_payload.get("metrics", [])) > 1 else {},
                     dimensions=[str(item) for item in metric_payload.get("dimensions") or []],
                     evidence_ids=metric_ids,
                     degraded=bool(metric_payload.get("degraded")),
@@ -1784,6 +2106,12 @@ class AnalysisExecutor:
             payload = state.evidence_payload(evidence_kind)
             if not payload or not evidence_ids:
                 continue
+            if evidence_kind == "period_comparison" and payload.get("comparisons"):
+                numbers = {f"comparisons.{name}.{key}": None for name, comparison in payload["comparisons"].items()
+                           for key in ("current", "baseline", "delta", "relative_change") if isinstance(comparison.get(key), (int, float))}
+            if evidence_kind == "contribution" and payload.get("by_metric"):
+                numbers = {f"by_metric.{name}.{key}": None for name, part in payload["by_metric"].items()
+                           for key in ("total_delta", "residual", "independent_current", "independent_baseline")}
             findings.append(
                 Finding(
                     kind=kind,
@@ -1864,6 +2192,8 @@ class AnalysisExecutor:
                 "metric evidence is degraded: "
                 + str(metric_payload.get("degraded_reason") or "bounded preview")
             )
+        if metric_payload and metric_payload.get("time_grain") and metric_payload.get("period_completeness") != "complete":
+            limitations.append("period completeness is unverified: no enforced ingestion coverage contract")
         if quality:
             counts = quality.get("counts") or {}
             if counts.get("warning"):

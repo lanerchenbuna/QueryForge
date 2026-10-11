@@ -401,6 +401,9 @@ Rules:
 User question:
 {context.task.question}
 
+Honor explicitly requested output column names and their order exactly. Aggregates
+must contribute to the final projection; unused CTEs cannot satisfy a metric.
+
 Regeneration feedback from a previous reflection (may be empty):
 {context.regeneration_feedback}
 

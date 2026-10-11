@@ -3,3 +3,4 @@ description: Reason about source ingestion, incremental loads, deduplication, an
 allowed_nodes: [plan_mode, gen_sql, reflect, fix]
 enabled: false
 priority: 80
+selection_keywords: ["ingestion", "cdc", "incremental", "deduplication", "增量"]

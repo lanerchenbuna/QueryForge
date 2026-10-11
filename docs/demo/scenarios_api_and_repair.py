@@ -1,14 +1,14 @@
 """Scenario library for the API/repair/growth demos (step 17, Demo E).
 
 These scenarios drive the *real* HTTP handlers, the real workflow repair loop and a
-reviewed analysis plan, all offline with a scripted model. `docs/demo/run_demo_e.py`
+governed diagnostic template, all offline with a scripted model for repair. `docs/demo/run_demo_e.py`
 narrates and asserts them; this module holds the scenario code so the demo entry
 point stays readable.
 
 Originally `scripts/demo_data_agent.py`; folded into `docs/demo/` so step 17 has a
 single documented demo surface (the duplicate was flagged in review).
 
-This uses scripted SQL generation and an explicitly reviewed analytical plan.
+This uses scripted SQL generation for repair and deterministic governed diagnostics.
 It makes no claim about live-model accuracy or autonomous root-cause inference.
 """
 from __future__ import annotations
@@ -30,7 +30,6 @@ from queryforge.application.analysis_planner import AnalysisPlannerService
 from queryforge.core.config import Config
 from queryforge.core.schemas.models import SqlTask
 from queryforge.domain.domains import DomainResolver
-from queryforge.orchestration.planner import AnalysisPlan, PlanStep
 from queryforge.workflow.workflow_runner import WorkflowRunner
 from scripts.benchmark_runners import ScriptedModel  # repo script, kept for the scripted model
 
@@ -99,7 +98,7 @@ def demo_repair(root: Path) -> dict:
 
 
 def demo_analysis(root: Path, *, paid_last: int = 20) -> dict:
-    """Three months, two channels. The reviewed plan recomputes all values from rows."""
+    """Three months, two channels; independent totals reconcile the computed drivers."""
     database=root/'growth.sqlite'
     with sqlite3.connect(database) as c:
         c.execute('CREATE TABLE users(id INTEGER PRIMARY KEY, month TEXT, channel TEXT)')
@@ -107,31 +106,21 @@ def demo_analysis(root: Path, *, paid_last: int = 20) -> dict:
         for month,paid in [('2024-01',60),('2024-02',40),('2024-03',paid_last)]:
             for channel,n in [('paid',paid),('organic',40)]:
                 start=len(rows)
-                rows.extend((start+i+1,month,channel) for i in range(n))
+                rows.extend((start+i+1,month+'-01',channel) for i in range(n))
         c.executemany('INSERT INTO users VALUES (?,?,?)',rows)
     semantic=dict(version=1,name='growth',entities=[dict(name='user',table='users',entity_type='fact',expected_columns=['id','month','channel'],primary_key=['id'],grain=['id'],
                    dimensions=[dict(name='month',column='month'),dict(name='channel',column='channel')])],
                    metrics=[dict(name='new_users',description='New users registered in each month',entity='user',aggregation='count',expression='COUNT(users.id)',synonyms=['new users'],
-                                 allowed_dimensions=['user.month','user.channel'])])
+                                 allowed_dimensions=['user.month','user.channel'], time_field='users.month',
+                                 analysis={'unit':'users','additivity':'additive','time':{'role':'registration',
+                                     'coverage_start':'2024-01-01','complete_through':'2024-03-31','require_complete_periods':True}})])
     path=root/'growth.yml';path.write_text(yaml.safe_dump(semantic))
     config=replace(config_at(root),database_path=str(database),semantic_model_path=str(path))
     planner=AnalysisPlannerService(config_loader=lambda:config)
     clarification=planner.analyze('分析用户增长下降的原因')
     assert clarification['status']=='needs_clarification',clarification
-    def query(id,sql,deps):
-        return PlanStep(id=id,action='query_metric',inputs={'metric':'new_users','sql':sql},depends_on=deps,expected_evidence=['metric_value'])
-    steps=[PlanStep(id='resolve',action='resolve_metric',inputs={'term':'new_users'},expected_evidence=['metric_resolution']),
-           PlanStep(id='quality',action='check_data_quality',inputs={'table_name':'users','checks':['grain_unique','null_rate']},depends_on=['resolve'],expected_evidence=['data_quality'],validation={'block_on_error':True}),
-           query('trend',"SELECT month,COUNT(*) AS new_users FROM users GROUP BY month ORDER BY month",['quality']),
-           PlanStep(id='compare',action='compare_periods',depends_on=['trend'],expected_evidence=['period_comparison']),
-           query('channels',"SELECT channel,COUNT(*) AS new_users FROM users WHERE month='2024-03' GROUP BY channel ORDER BY channel",['compare']),
-           PlanStep(id='drill',action='drill_down',depends_on=['channels'],expected_evidence=['drill_down']),
-           query('pairs',"SELECT channel,SUM(CASE WHEN month='2024-02' THEN 1 ELSE 0 END) AS baseline,SUM(CASE WHEN month='2024-03' THEN 1 ELSE 0 END) AS current FROM users GROUP BY channel ORDER BY channel",['drill']),
-           PlanStep(id='contribution',action='calculate_contribution',depends_on=['pairs'],expected_evidence=['contribution']),
-           PlanStep(id='answer',action='compose_answer',depends_on=['contribution'],inputs={'require_evidence':['metric_resolution','data_quality','metric_value','period_comparison','drill_down','contribution']})]
-    plan=AnalysisPlan(question='new users',steps=steps)
-    payload=planner.analyze('new users',plan=plan,run_id='growth-demo')
+    payload=planner.analyze('Explain new users monthly for March 2024 month over month by channel',run_id='growth-demo')
     assert payload['status']=='succeeded',payload
     contribution=next(e['payload'] for e in payload['evidence'] if e['kind']=='contribution')
-    return dict(mode='reviewed_plan_real_sql_analysis',clarification=clarification,
+    return dict(mode='governed_diagnostic_independent_totals',clarification=clarification,
                 expected_delta=paid_last-40,contribution=contribution,trace=payload)

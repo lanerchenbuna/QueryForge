@@ -49,11 +49,21 @@ class SkillSelectionNode(Node):
                 self.TARGET_NODE,
                 subject_skill_names if subject_skill_names is not None else None,
             )
-            catalog = self.skill_manager.context_for_node(self.TARGET_NODE, [])
+            eligible = self._eligible_skill_names(context)
+            catalog = self.skill_manager.context_for_node(self.TARGET_NODE, [], available_names=eligible)
             context.available_skills_context = catalog.available_skills
+            if not set(eligible) - set(defaults.loaded_skill_names):
+                selected = self.skill_manager.context_for_node(
+                    self.TARGET_NODE, list(defaults.loaded_skill_names), available_names=eligible)
+                self._apply_context(context, selected)
+                context.skill_selection_mode = "auto"
+                context.task_context["skill_prefilter"] = {"router_called": False, "eligible": eligible}
+                context.skill_selection_reason = "No relevant optional skill; enabled defaults loaded without a model call."
+                return self.success(context.skill_selection_reason)
             try:
+                context.task_context["skill_prefilter"] = {"router_called": True, "eligible": eligible}
                 payload = self.llm.generate_json(self._build_selection_prompt(context, catalog.available_skills))
-                requested, reason = self._parse_selection(payload)
+                requested, reason = self._parse_selection(payload, eligible)
             except Exception as exc:
                 self._apply_context(context, defaults)
                 context.skill_selection_mode = "auto_fallback"
@@ -70,7 +80,7 @@ class SkillSelectionNode(Node):
             )
             selected_names = self._scope_skill_names(context, selected_names)
             selected = self.skill_manager.context_for_node(
-                self.TARGET_NODE, selected_names
+                self.TARGET_NODE, selected_names, available_names=eligible
             )
             self._apply_context(context, selected)
             context.skill_selection_mode = "auto"
@@ -106,7 +116,16 @@ class SkillSelectionNode(Node):
         allowed_set = set(allowed)
         return [name for name in names if name in allowed_set]
 
-    def _parse_selection(self, payload: dict) -> tuple[list[str], str]:
+    def _eligible_skill_names(self, context: Context) -> list[str]:
+        question = " ".join(context.task.question.casefold().split())
+        subject_names = self._subject_skill_names(context)
+        names = [skill.name for skill in self.skill_manager.registry.list_skills()
+                 if skill.applies_to(self.TARGET_NODE)
+                 and (subject_names is not None or skill.metadata.enabled or skill.metadata.selection_keywords is None
+                      or any(keyword in question for keyword in skill.metadata.selection_keywords))]
+        return self._scope_skill_names(context, names)
+
+    def _parse_selection(self, payload: dict, eligible: list[str] | None = None) -> tuple[list[str], str]:
         raw_names = payload.get("skills")
         if not isinstance(raw_names, list) or not all(
             isinstance(name, str) for name in raw_names
@@ -117,6 +136,8 @@ class SkillSelectionNode(Node):
             for skill in self.skill_manager.registry.list_skills()
             if skill.applies_to(self.TARGET_NODE)
         }
+        if eligible is not None:
+            available_names &= set(eligible)
         selected = []
         for name in raw_names:
             normalized = name.strip()

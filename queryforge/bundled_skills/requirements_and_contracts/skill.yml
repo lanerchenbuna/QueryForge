@@ -3,3 +3,4 @@ description: Translate analytical requirements into explicit grain, keys, metric
 allowed_nodes: [plan_mode, gen_sql, reflect]
 enabled: false
 priority: 90
+selection_keywords: ["contract", "requirements", "metric definition", "口径", "契约"]

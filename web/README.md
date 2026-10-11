@@ -25,8 +25,10 @@ terminal:
 queryforge --serve-api
 ```
 
-If the API uses another address, copy `.env.example` to `.env.local` and change
-`QUERYFORGE_API_URL`.
+If the API uses another loopback address, copy `.env.example` to `.env.local` and
+change `QUERYFORGE_API_URL`. Local Studio rejects remote upstreams and foreign
+browser origins. See [the Studio guide](../docs/studio.md) for bounded physical
+profiling, actual publication, snapshot expiry and reproducible offline checks.
 
 ## Product areas
 
@@ -55,7 +57,8 @@ tests.
 
 ## Runtime storage
 
-The hosted build uses Cloudflare-compatible bindings:
+Local development persists Cloudflare-compatible bindings through Miniflare.
+`STUDIO_STATE_DIR` can isolate disposable test state:
 
 - `DB` (D1) stores data domains, source metadata, and domain-scoped run history.
 - `UPLOADS` (R2) stores files under

@@ -14,7 +14,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-只读执行-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20治理-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-928%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-1080%20passed%2C%2025%20skipped-2EA44F)
 ![Offline acceptance](https://img.shields.io/badge/acceptance-13%2F13-7C3AED)
 
 </div>
@@ -28,30 +28,7 @@ QueryForge 是一个本地优先、以数据域为第一入口的 AI 数据分�
 示例域），再在该域内上传数据、评审语义契约和发起分析。项目把这套域级工作流与
 NL2SQL、AST 级安全策略、只读执行、有界修复和完整运行产物串成闭环。
 
-> QueryForge 当前专注 SQLite 和受控环境，是面向作品展示与架构验证的参考项目，
-> 不是可直接公网部署的多租户分析服务。
-
-### 实测表现
-
-治理层是确定性的，因此可以离线穷尽测试；模型层不是，所以它的数字单独汇报，并且必须
-同时给出样本量。以下两项都可从本仓库复现。
-
-| 项目 | 结果 | 复现方式 |
-| --- | --- | --- |
-| 离线测试套件 | 928 通过，25 跳过 | `./init.sh` |
-| 离线验收门禁 | 13/13 项 | `make check` |
-| 确定性 Agent 基准 | 23/23 任务（`dev` + `regression` 分片；9 条 `holdout` 需显式请求） | `python scripts/benchmark_agent.py --tier 1 --gate` |
-| 真实模型 NL2SQL 准确率 | **语义正确率 0.875**，执行成功率 1.0 | 40 个用例，单次运行，`deepseek-v4-flash` |
-
-最后一行有两点必须说清楚，它们比数字本身更重要：
-
-- 这是 **40 个用例的单次运行**。在**完全相同的代码**上曾观察到 ±0.03 的波动，因此这个
-  数字无法分辨小幅变化。
-- 它只覆盖 anime 示例域。它能证明整条链路在真实模型上跑得通，**不构成通用准确率承诺**。
-
-Tier-1 的 23/23 衡量的是*工程链路*（治理、执行、证据、预算、失败分类），**不是**模型能力：
-SQL 由测试夹具直接提供。方法与冻结基线见
-[NL2SQL 评测](docs/nl2sql_evaluation.md)。
+> Studio 面向本地单用户使用，默认以只读方式分析 SQLite 数据。
 
 ## 产品界面
 
@@ -91,29 +68,18 @@ SQL 由测试夹具直接提供。方法与冻结基线见
 | 如何接入其他应用 | 提供 CLI、REST/SSE、MCP、Gateway、图表和 HTML 报告 |
 | 原始数据如何进入分析 | 从 CSV、Parquet 和分页 JSON API 构建受治理 SQLite 数据资产 |
 
-## 核心亮点
-
-- **纵深防御**：SQL 在执行前接受治理，并在数据库执行边界再次校验。
-- **语义契约**：YAML 模型描述业务指标、实体、关系、基数、owner、SLA、
-  敏感级别和质量规则。
-- **自适应工作流**：简单问题保持轻量；复杂问题可启用有界 Tool Loop。
-- **默认只读**：普通分析以只读方式打开 SQLite，并拒绝写操作和管理类 SQL。
-- **统一多端交付**：同一应用服务可通过 CLI、REST/SSE、MCP 和 Webhook Gateway 使用。
-- **可复现评测**：仓库内置覆盖三套独立 Schema 的 32 条确定性 Agent 基准任务、覆盖三个
-  业务域的 120 条 NL2SQL 金标集，并在文档中记录冻结的真实模型基线。
-
 ## 快速开始
 
 ### 1. 安装
 
-环境要求：**Python 3.11 或 3.12**、SQLite。
+环境要求：**Python 3.11 或 3.12**；Studio 使用 **Node.js 22**。
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
-cp .env.example .env
+cp -n .env.example .env
 ```
 
 ### 2. 配置模型
@@ -122,9 +88,8 @@ cp .env.example .env
 Qwen、DeepSeek 和 GLM 的配置。
 
 ```dotenv
-LLM_PROVIDER=qwen
-QWEN_API_KEY=your-api-key
-QWEN_MODEL=qwen-plus
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your-api-key
 ```
 
 Provider 默认值和环境变量映射见 [`models.yml`](models.yml)。
@@ -151,14 +116,13 @@ queryforge \
 
 ### 体验 QueryForge Studio
 
-仓库现在包含一个完整的可视化工作台：可以创建和切换数据域、在域内接入数据、评审
-强制语义层、提出受治理的自然语言问题、检查 SQL 与 Trust Trace 证据，并审计域内
-历史运行。
+在工作台中创建数据域、上传 CSV/Parquet、审核语义并发布，然后查询、检查 SQL 和
+Trust Trace，或回放绑定原数据版本的留存结果。
 
 ```bash
 # 终端 1：QueryForge API
-python -m pip install -e ".[api]"
-queryforge --serve-api
+python -m pip install -e ".[api,assets]"
+queryforge --serve-api --api-host 127.0.0.1 --api-port 8000
 
 # 终端 2：QueryForge Studio
 make web-install
@@ -195,6 +159,7 @@ SQL candidate
   → 危险函数检查
   → 递归 CTE 与 Cross Join 检查
   → 表、Join 和 LIMIT 预算
+  → 指标、筛选与有效输出核验
   → 受治理预览
   → 执行边界二次校验
 ```
@@ -233,26 +198,24 @@ metrics:
     sensitivity: internal
 ```
 
-模型可声明实体、维度、指标、粒度、关系、Join Path、fan-out 约束、运营元数据和
-物理质量规则。QueryForge 现在默认强制使用经过校验的语义模型，并自动发现数据库旁边
-的模型；除非显式启用诊断逃生口，否则不允许只依赖裸 Schema 查询。
+模型定义实体、维度、指标、粒度、关系和质量规则。查询默认要求经过校验的语义模型，
+并自动发现数据库旁的 YAML。跨事实指标先独立聚合再连接，比例按分子分母重算，
+各指标使用自己的事件时间、单位和覆盖边界。变化诊断提供分类贡献、独立总量对账和证据。
 
-Studio 中的语义层构建是「域优先 + 强门禁」流程：
+Studio 的数据接入流程：
 
 ```text
 创建/选择数据域
-  → 上传该域数据
-  → Profiling 物理结构
-  → 确认实体身份和行粒度
-  → 定义维度、度量、指标和时间口径
-  → 评审关系、基数和 Join Path
-  → 标注敏感级别、Owner、策略和质量规则
-  → 通过全部阻断性检查
-  → 数据 + 语义原子发布
+  → 上传 CSV/Parquet
+  → 审核实体、粒度、维度和指标
+  → 确认 Owner 与敏感级别
+  → 校验物理数据与语义合同
+  → 发布数据 + 语义
 ```
 
-技术字段名只作为推断证据，不能替代业务定义。新建域从空白契约开始，绝不会继承
-Anime 示例域的实体或指标。
+新域从空白契约开始。Studio 提供单实体维度/指标编辑，完整关系、时间和单位在 YAML
+中编写；物理发布成功后才能查询。默认技能预筛选和内容版本缓存减少无效上下文，修复与
+候选预览受预算约束。历史回放保留原域和数据版本，报告过期后可隔离清理。
 
 创建或增量更新语义层：
 
@@ -400,7 +363,7 @@ queryforge/
 evaluation/gold/       # 多业务域 NL2SQL 评测集
 evaluation/tasks/      # 确定性 Agent 基准任务（dev/regression/holdout）
 sample_data/           # 可直接运行的 SQLite 数据集和语义模型
-web/                   # QueryForge Studio 与托管持久化适配器
+web/                   # QueryForge Studio 与本地 D1/R2 存储
 scripts/               # 构建、基准、评测和验收工具
 tests/                 # 单元、集成、边界和验收测试
 docs/                  # 架构与功能文档
@@ -409,52 +372,17 @@ docs/                  # 架构与功能文档
 
 依赖从接口层和应用层向领域、基础设施与核心契约单向流动。
 
-## 质量与评测
-
-执行完整离线质量门禁：
+## 开发与检查
 
 ```bash
-./init.sh                # 环境检查 + 928 个测试 + 仓库状态
-make check               # 仓库卫生检查 + 13 项离线验收
+./init.sh             # 环境与离线测试
+make check            # 仓库检查与完整验收
+make semantic-check   # 语义模型漂移
+make web-check        # Studio lint、类型、构建与测试
 ```
 
-在线模型评测覆盖执行成功率、语义等价率、策略 precision/recall、延迟、实测 token 用量和
-投影容忍度：
-
-```bash
-python scripts/evaluate_sql.py \
-  --cases evaluation/gold/nl2sql_multidomain.jsonl \
-  --model-provider qwen \
-  --output .queryforge/evaluations/qwen.json
-```
-
-CI 会在 Python 3.11 和 3.12 上执行离线验收（含确定性 Agent Benchmark），另有一个需要
-可选传输依赖的集成任务。真实模型评测是手动触发的 workflow
-（`.github/workflows/model-eval.yml`），因为它会产生实际费用。
-
-## 已验证的能力（以及未验证的部分）
-
-本节每条声明都能从仓库复现。这张表的价值在第三列：**没被验证的东西**和已验证的东西
-一样写清楚。
-
-| 能力 | 怎么验证 | 状态 |
-| --- | --- | --- |
-| 完整离线测试套件 | `./init.sh` —— **928 个测试，25 skip，0 失败** | 已验证 |
-| 仓库 + 集成门禁 | `make check`（`scripts/run_acceptance.py --full`，13/13 项通过） | 已验证 |
-| 端到端 Demo（上传→发布→查询；语义校验抓错；多步分析；跨传输/拒绝/恢复） | `make demo` —— `docs/demo/` 下五个带断言的叙事脚本，离线且免 key | 已验证 |
-| 确定性 Agent Benchmark（32 个金标任务、3 个独立 schema、消融、效果门禁） | `python scripts/benchmark_agent.py --tier 1 --gate` | 已验证（23/23 —— 即 `dev` + `regression` 分片；9 条 `holdout` 需用 `--split holdout` 显式请求） |
-| 可选依赖集成层 | `python scripts/benchmark_agent.py --tier 2 --gate` —— 依赖缺失**判定失败**而非跳过 | 已装 `.[api,mcp]` 后通过 |
-| 真实模型 NL2SQL 评测 | `python scripts/evaluate_sql.py --cases evaluation/gold/nl2sql_multidomain.jsonl --model-provider <p> --model <m>` | **40 个 anime 用例、单次运行、`deepseek-v4-flash` 下语义正确率 0.875** —— 限制见文首说明 |
-| 自动技能选择是否值得其开销 | `--skill-mode auto` 对比 `--skill-mode off` | **未确立** —— 它带来 p50 延迟 +139%、输出 token +44%，而准确率收益未被测出 |
-| PostgreSQL 后端 | `pip install '.[postgres]'` 后使用 `PostgresConnector` | **已实现、未验证**：未在真实服务器上验证，且未从包 API 导出 |
-
-Demo 与 tier 1 全部离线、确定性（无模型调用、无网络、无需 API key）。Agent Benchmark 的
-tier 1 由金标提供 SQL，所以 23/23 衡量的是**工程链路**（治理、执行、证据、预算、失败分类），
-**不是模型准确率**。真实模型数字必须来自带凭证的 tier 3 运行，并单独报告。
-
-部署等级：**受控环境、单租户、只读数据访问**。默认后端为 SQLite，另有可选的 DuckDB 与
-PostgreSQL 适配器（见 [数据库适配器](docs/database_adapters.md)）。系统未针对任意不可信的
-多租户输入做加固；两处诚实的空白是通用领域的模型准确率与 PostgreSQL 后端。
+评测区分确定性治理测试和真实模型表现，方法、结果与限制见
+[评测文档](docs/nl2sql_evaluation.md)。
 
 ## 项目文档
 
@@ -481,32 +409,19 @@ PostgreSQL 适配器（见 [数据库适配器](docs/database_adapters.md)）。
 - [行为准则](CODE_OF_CONDUCT.md)
 - [变更记录](CHANGELOG.md)
 
-代码结构、CI 和协作模板已经具备 GitHub 发布条件。公开发布前仍需由仓库所有者选择并
-添加 `LICENSE`；本次整理没有擅自替你作出许可证法律选择。
+仓库尚未声明开源许可证。
 
-## 范围与安全边界
+## 部署与安全
 
-QueryForge 的安全保证适用于其配置后的 SQLite 执行边界。项目目前**不包含**：
+Studio 监听本地地址并限制同源请求；普通分析仅允许只读 SQL。REST/MCP 用于受控环境，
+本地密钥放在被忽略的 `.env` 中。
 
-- 生产级认证授权、多租户隔离和限流；
-- 持久化分布式工作流恢复或 token 级取消；
-- MySQL、数仓、湖仓和流处理系统适配器（PostgreSQL 连接器已存在，但既未从包 API 导出，
-  也未在真实服务器上验证）；
-- 跨 Provider 统一计费，或训练模型的完整生命周期。
+- `QUERYFORGE_API_KEY`：启用 REST/Gateway 请求认证。
+- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST`：限制数据和报告目录。
+- `REPORT_RETENTION_DAYS`：设置报告访问有效期，默认30天。
 
-请将 REST 和 MCP 接口部署在受控环境中，不要提交 Provider 密钥、运行状态，
-以及包含敏感数据的本地数据库。
-
-网络传输层无需改代码即可加固：
-
-- `QUERYFORGE_API_KEY` — 设置后，REST/Gateway 端点（`/health` 除外）要求
-  `Authorization: Bearer <key>` 或 `X-API-Key: <key>`。
-- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST` — 逗号分隔的目录列表，用于约束
-  调用方传入的 `database` / `semantic_model_path` / `sql_policy_path` 以及报告输出
-  路径。未配置时，网络传输层回退为「项目根目录 + 默认数据库所在目录」。
-
-`POST /ask/stream` 会先发送进度事件，最后以一个携带序列化答案（或 `error`）的
-终态 `final_result` 事件收尾；客户端断开连接后，运行会在下一个节点边界协作式取消。
+SSE 客户端断开后在执行边界协作式取消；域内历史快照绑定原数据版本。部署配置见
+[配置参考](docs/configuration.md)。
 
 ## Roadmap
 

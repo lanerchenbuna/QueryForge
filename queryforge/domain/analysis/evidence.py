@@ -1301,6 +1301,7 @@ DATA_EVIDENCE_KINDS = frozenset(
         KIND_ANOMALY,
         "aggregate",
         "metric_value",
+        "metric_totals",
         "query_metric",
         "result_set",
         "trend",

@@ -22,6 +22,7 @@ Run: `.venv/bin/python docs/demo/run_demo_e.py`
 from __future__ import annotations
 
 import sqlite3
+import json
 import sys
 import tempfile
 from dataclasses import replace
@@ -94,7 +95,7 @@ def main() -> int:
             result = demo_analysis(scenario_root, paid_last=paid)
             contribution = result["contribution"]
             paid_row = next(
-                row for row in contribution["contributions"] if row["category"] == "paid"
+                row for row in contribution["contributions"] if json.loads(row["category"]) == ["paid"]
             )
             check(
                 contribution["total_delta"] == expected_delta

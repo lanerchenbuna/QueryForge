@@ -3,3 +3,4 @@ description: Example commerce metric rules for order revenue and cancellation ha
 allowed_nodes: [gen_sql, reflect, fix]
 enabled: false
 priority: 95
+selection_keywords: ["order revenue", "cancelled orders", "cancellation"]
