@@ -24,8 +24,5 @@ Thumbs.db
 *.sqlite-wal
 *.build.json
 semantic-weekly-report.json
-# Generated benchmark reports: raw JSON is regenerable, so it is not tracked.
-# The summarized, versioned evidence lives in docs/optimization/baselines.md
-# (the comment here previously pointed at docs/optimization/step-16-acceptance.md,
-# which does not exist in the repository).
+# Generated benchmark reports; regenerate with scripts/benchmark_agent.py.
 evaluation/reports/

@@ -400,7 +400,7 @@ make web-check        # Studio lint, types, build and tests
 ```
 
 Evaluation separates deterministic governance checks from real-model behaviour.
-See the [evaluation guide](docs/nl2sql_evaluation.md) for methods, results and limits.
+See the [evaluation guide](docs/nl2sql_evaluation.md) for benchmark commands and result interpretation.
 
 ## Documentation
 
@@ -417,7 +417,6 @@ See the [evaluation guide](docs/nl2sql_evaluation.md) for methods, results and l
 | Evaluation | [NL2SQL evaluation](docs/nl2sql_evaluation.md) |
 | Reports | [Report artifacts](docs/report_artifact.md) |
 | Subject scoping | [Subject tree](docs/subject_tree.md) |
-| GitHub release | [First-publish checklist](docs/github_release.md) |
 | Documentation index | [All guides](docs/README.md) |
 
 ## Contributing and Security

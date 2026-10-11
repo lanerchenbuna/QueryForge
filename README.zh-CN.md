@@ -381,7 +381,7 @@ make semantic-check   # 语义模型漂移
 make web-check        # Studio lint、类型、构建与测试
 ```
 
-评测区分确定性治理测试和真实模型表现，方法、结果与限制见
+评测区分确定性治理测试和真实模型表现，运行方法与结果解读见
 [评测文档](docs/nl2sql_evaluation.md)。
 
 ## 项目文档
@@ -399,7 +399,6 @@ make web-check        # Studio lint、类型、构建与测试
 | 评测 | [NL2SQL 评测](docs/nl2sql_evaluation.md) |
 | 报告 | [报告产物](docs/report_artifact.md) |
 | 主题域裁剪 | [Subject Tree](docs/subject_tree.md) |
-| GitHub 发布 | [首次发布清单](docs/github_release.md) |
 | 文档索引 | [全部指南](docs/README.md) |
 
 ## 贡献与安全

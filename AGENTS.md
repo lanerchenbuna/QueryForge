@@ -131,6 +131,6 @@ the relevant area.
 | Configuration / env vars | `docs/configuration.md` |
 | Semantic model authoring | `docs/semantic_authoring.md`, `docs/semantic_contracts.md` |
 | REST / MCP surfaces | `docs/api_reference.md`, `docs/mcp_server.md` |
-| Evaluation method + frozen numbers | `docs/nl2sql_evaluation.md` |
+| Evaluation method + benchmark commands | `docs/nl2sql_evaluation.md` |
 | Database backends | `docs/database_adapters.md` |
-| Release process | `docs/github_release.md` |
+| Development checks | `docs/README.md` |
