@@ -1,5 +1,6 @@
 """Diagnosis outcomes checked against independent SQLite populations."""
 import contextlib
+import importlib.util
 import io
 import json
 import sqlite3
@@ -211,6 +212,7 @@ class AnalysisDiagnosticsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate category"):
             reconcile_buckets({**buckets, "rows": buckets["rows"] + [buckets["rows"][-1]]}, totals, "item_amount", "2025-02", "2024-02")
 
+    @unittest.skipUnless(importlib.util.find_spec("fastapi") and importlib.util.find_spec("httpx"), "API extras absent")
     def test_rest_delivers_the_same_reconciled_diagnosis(self):
         from fastapi.testclient import TestClient
         from queryforge.application import AgentService
