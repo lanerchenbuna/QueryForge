@@ -9,6 +9,15 @@ and does not yet claim semantic-versioning stability.
 
 ### Added
 
+- Multi-measure analysis, fact-grain aggregation, ratio components and event-time
+  comparison with explicit coverage, units and additivity contracts.
+- Reconciled change diagnostics with independent totals, residuals and evidence.
+- Full-result evaluation contracts, physical-source checks and repeated paired
+  experiments with immutable audit and resume tools.
+- Keyword skill prefiltering and bounded content-version prompt caches.
+- Local Studio publication state, editable measures and domain/version-bound
+  result replay; report expiry with recoverable quarantine.
+
 - Mandatory, reviewable semantic layers for data-asset publication and queries.
 - Atomic data-and-semantic publication with rollback on contract failure.
 - Semantic scaffolding, incremental model building, drift baselines, and weekly audits.
@@ -58,6 +67,15 @@ and does not yet claim semantic-versioning stability.
   interpreter as `./init.sh` instead of whatever `python` is first on `PATH`.
 
 ### Fixed
+
+- Omitted measures and filters, incorrect comparison periods and unknown terminal
+  outcomes being delivered as successful answers.
+- Inactive CTE aggregates and unrelated grains satisfying metric checks; incorrect
+  output labels, identifier transformations and weakened NULL predicates.
+- Invalid or duplicate candidates consuming preview budgets and cancellation
+  allowing later SQL previews.
+- Studio reporting unpublished sources as ready, accepting unsupported upload
+  formats and displaying stale results after a domain switch.
 
 - Correct answers were scored wrong when the model returned extra columns or an
   equivalent shape; correctness is now decided by semantic result equivalence.

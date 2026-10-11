@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 from queryforge.application import AgentOptions
 
 
+class ReportExpireRequest(BaseModel):
+    dry_run: bool = True
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
     database: str | None = None

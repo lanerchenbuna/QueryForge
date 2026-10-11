@@ -3,3 +3,4 @@ description: Reduce scanned data and expensive operations without changing query
 allowed_nodes: [gen_sql, reflect, fix]
 enabled: false
 priority: 60
+selection_keywords: ["slow", "optimize", "performance", "explain", "性能", "慢查询"]

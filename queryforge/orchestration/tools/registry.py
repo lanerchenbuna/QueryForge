@@ -1239,6 +1239,13 @@ _ANALYSIS_CATALOG: tuple[tuple[ToolSpec, ToolHandler], ...] = (
                     "current": _NUMBER_OR_NULL,
                     "baseline": _NUMBER_OR_NULL,
                     "label": _STRING_OR_NULL,
+                    "comparison_baseline": {
+                        "type": "string",
+                    },
+                    "time_grain": {
+                        "type": "string",
+                        "enum": ["daily", "weekly", "monthly", "quarterly", "yearly"],
+                    },
                     "method": {
                         "type": ["string", "null"],
                         "enum": list(COMPARISON_METHODS),

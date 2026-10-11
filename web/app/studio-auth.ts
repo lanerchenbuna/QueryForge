@@ -1,4 +1,5 @@
 import type { ChatGPTUser } from "./chatgpt-auth";
+import { localRequestError } from "./lib/local-boundary";
 
 const USER_EMAIL_HEADER = "oai-authenticated-user-email";
 const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
@@ -10,7 +11,8 @@ export type StudioAuthMode = "off" | "chatgpt";
 
 /**
  * Effective Studio auth mode, driven by the STUDIO_AUTH_MODE env var.
- * `off` (default) keeps the current anonymous behavior; `chatgpt` requires
+ * `off` (default) permits local single-user requests behind the loopback/origin
+ * boundary; `chatgpt` requires
  * an `oai-authenticated-user-*` header on every Studio/proxy request.
  */
 export function studioAuthMode(): StudioAuthMode {
@@ -52,7 +54,8 @@ export type StudioAuthResult = {
  */
 export function requireStudioUser(request: Request): StudioAuthResult {
   if (studioAuthMode() !== "chatgpt") {
-    return { user: null, response: null };
+    const error = localRequestError(request);
+    return { user: null, response: error ? Response.json({ detail: error }, { status: 403 }) : null };
   }
   const user = getStudioUser(request);
   if (!user) {

@@ -88,6 +88,8 @@ _ALIASES: dict[str, TerminalOutcome] = {
     "degraded": "partial",
     "error": "failed",
     "canceled": "cancelled",
+    "unsupported": "blocked",
+    "unverified": "blocked",
 }
 
 #: Transport event protocol outcomes. Deliberately smaller than the canonical set:
@@ -117,7 +119,7 @@ def derive_outcome(
     2. a recorded gate block wins (a deterministic gate refused the stage and
        recorded why) — this is the case E-02 got wrong;
     3. otherwise the workflow's own result status, normalised;
-    4. otherwise the run is treated as succeeded.
+    4. otherwise fail closed: no recognized terminal result proves success.
     """
 
     if cancelled:
@@ -126,10 +128,7 @@ def derive_outcome(
         return "blocked"
     normalized = normalize_outcome(result_status)
     if normalized is None:
-        # Not a terminal spelling: an unknown or non-terminal value is treated as
-        # a success, which matches the historical behaviour of defaulting to
-        # "success" while making the decision explicit and testable.
-        return "succeeded"
+        return "failed"
     return normalized
 
 

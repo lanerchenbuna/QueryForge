@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from queryforge.workflow.node.parallel_candidates_node import ParallelCandidatesNode
@@ -183,6 +184,49 @@ class ParallelCandidatesTest(unittest.TestCase):
         )
         self.assertEqual(result["selected_index"], 0)
         self.assertEqual(result["evaluations"][1]["status"], "not_previewed")
+
+    def test_rejections_and_duplicates_do_not_spend_preview_budget(self):
+        tool = self.tool()
+        with patch.object(tool, "execute_sql_preview", wraps=tool.execute_sql_preview) as preview:
+            result = SQLSelector(tool, max_preview=1).select([
+                {"sql": "DROP TABLE items"},
+                {"sql": "DROP TABLE items"},
+                {"sql": "SELECT name FROM items"},
+                {"sql": "SELECT category FROM items"},
+            ], self.context())
+        self.assertEqual(result["selected_index"], 2)
+        self.assertEqual(preview.call_count, 1)
+        self.assertEqual([item["status"] for item in result["evaluations"]],
+                         ["rejected", "duplicate", "eligible", "not_previewed"])
+
+    def test_cancelled_candidates_do_not_call_model_or_preview(self):
+        tool = self.tool()
+        llm = CandidateLLM([])
+        with patch.object(llm, "generate_json") as model, patch.object(tool, "execute_sql_preview") as preview:
+            node = ParallelCandidatesNode(llm, tool, cancel_check=lambda: True)
+            self.assertFalse(node.execute(self.context()).success)
+            selection = node._selector_for(4).select([{"sql": "SELECT name FROM items"}], self.context())
+        self.assertIsNone(selection["selected_sql"])
+        self.assertEqual(selection["preview_status"], "cancelled")
+        model.assert_not_called()
+        preview.assert_not_called()
+
+    def test_cancellation_after_preview_discards_winner(self):
+        tool = self.tool()
+        cancelled = False
+        original = tool.execute_sql_preview
+
+        def execute(*args):
+            nonlocal cancelled
+            result = original(*args)
+            cancelled = True
+            return result
+
+        with patch.object(tool, "execute_sql_preview", side_effect=execute):
+            result = SQLSelector(tool, cancel_check=lambda: cancelled).select(
+                [{"sql": "SELECT name FROM items"}], self.context())
+        self.assertEqual(result["preview_status"], "cancelled")
+        self.assertIsNone(result["selected_sql"])
 
     def test_parallel_node_generates_two_and_records_selection(self):
         llm = CandidateLLM(

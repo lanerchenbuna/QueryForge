@@ -3,3 +3,4 @@ description: Apply data minimization, sensitive-data handling, lineage, retentio
 allowed_nodes: [plan_mode, gen_sql, reflect, fix]
 enabled: false
 priority: 88
+selection_keywords: ["sensitive", "restricted", "retention", "privacy", "权限", "敏感"]

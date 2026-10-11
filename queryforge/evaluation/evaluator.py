@@ -4,9 +4,9 @@ Step 16 of the optimization plan.  Three properties drive every decision here:
 
 **Goal oriented, never path oriented.**  A task is scored on the observable
 outcome -- the status the pipeline reported, the evidence it produced, the
-values it published, the claims it made -- and *never* on SQL text or on the
-order in which steps ran.  Two runs that reach the same goal by different routes
-both pass (16-T2).
+values it published, the claims it made and opt-in physical source requirements
+-- never on exact SQL text or the order in which steps ran. Two runs that reach
+the same declared goal by different routes both pass (16-T2).
 
 **Nothing self-assessed is trusted.**  ``validation_problems``,
 ``answer_validation.review_required``, a payload's own ``passed`` flag and any
@@ -19,8 +19,8 @@ recorded tool calls (16-T1).
 -- the step's exit gate ("从原始 case 与 trace 可重算报告") is executable, not
 aspirational.
 
-This module imports nothing but the standard library and pydantic: the evaluator
-must not be able to share a bug with the code it grades (see
+This evaluator uses the standard library, pydantic and SQLGlot for independent
+source analysis. It never delegates verdicts to the runtime it grades (see
 ``tests/test_agent_task_gold.py::test_evaluator_does_not_import_runtime_being_graded``).
 """
 
@@ -33,6 +33,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from queryforge.evaluation.tasks import TaskSpec, spec_index
+from queryforge.evaluation.sources import check_sql_sources
 from queryforge.evaluation.thresholds import check_metrics
 from queryforge.evaluation.trace import (
     TaskTrace,
@@ -70,7 +71,7 @@ FAILURE_CLASSES: tuple[str, ...] = (
 )
 
 #: Fixed check names (contract 3.3), in reporting order.  ``claim_guard`` and
-#: ``budget`` are only emitted when the gold declares the corresponding
+#: ``budget`` and ``sql_sources`` are only emitted when the gold declares the corresponding
 #: constraint, so a rate computed over a check never divides by tasks the check
 #: did not apply to.
 CHECK_NAMES: tuple[str, ...] = (
@@ -80,6 +81,7 @@ CHECK_NAMES: tuple[str, ...] = (
     "required_evidence",
     "forbidden_evidence",
     "expected_values",
+    "sql_sources",
     "evidence_anchor",
     "tool_legality",
     "tool_validity",
@@ -167,6 +169,7 @@ _FAILURE_PRIORITY: tuple[str, ...] = (
     "budget",
     "outcome_kind",
     "status_accepted",
+    "sql_sources",
     "expected_values",
     "forbidden_evidence",
     "evidence_anchor",
@@ -184,6 +187,7 @@ _FAILURE_BY_CHECK: dict[str, str] = {
     "required_evidence": "missing_evidence",
     "forbidden_evidence": "policy_not_enforced",
     "expected_values": "wrong_value",
+    "sql_sources": "unsupported_claim",
     "evidence_anchor": "unsupported_claim",
     "tool_legality": "illegal_tool",
     "tool_validity": "failed_tool",
@@ -713,12 +717,12 @@ def _format_value(value: Any) -> str:
     return str(value)
 
 
-def _values_match(actual: Any, expected: Any, tolerance: float) -> bool:
+def _values_match(actual: Any, expected: Any, tolerance: float, *, ordered: bool = False, absolute_tolerance: float = 0.0) -> bool:
     """Compare one gold value with the observed one.
 
-    Numbers use the task's *relative* tolerance (with an exact match required for
-    a gold zero, where a relative tolerance is undefined), strings and booleans
-    compare exactly, and lists compare as multisets (order is not an outcome).
+    Numbers use the task's relative tolerance. Zero is exact unless an absolute
+    tolerance is explicitly declared. Strings and booleans compare exactly;
+    outer lists are multisets, while cells inside rows retain their positions.
     """
 
     if isinstance(expected, bool) or isinstance(actual, bool):
@@ -728,7 +732,7 @@ def _values_match(actual: Any, expected: Any, tolerance: float) -> bool:
             return False
         try:
             return math.isclose(
-                float(actual), float(expected), rel_tol=tolerance, abs_tol=0.0
+                float(actual), float(expected), rel_tol=tolerance, abs_tol=absolute_tolerance
             )
         except (OverflowError, ValueError):
             return False
@@ -737,13 +741,15 @@ def _values_match(actual: Any, expected: Any, tolerance: float) -> bool:
             return False
         if len(actual) != len(expected):
             return False
+        if ordered:
+            return all(_values_match(a, e, tolerance, ordered=True, absolute_tolerance=absolute_tolerance) for a, e in zip(actual, expected))
         remaining = [item for item in actual]
         for wanted in expected:
             index = next(
                 (
                     position
                     for position, candidate in enumerate(remaining)
-                    if _values_match(candidate, wanted, tolerance)
+                    if _values_match(candidate, wanted, tolerance, ordered=isinstance(wanted, list), absolute_tolerance=absolute_tolerance)
                 ),
                 None,
             )
@@ -755,7 +761,7 @@ def _values_match(actual: Any, expected: Any, tolerance: float) -> bool:
         if not isinstance(actual, Mapping):
             return False
         return all(
-            key in actual and _values_match(actual[key], value, tolerance)
+            key in actual and _values_match(actual[key], value, tolerance, absolute_tolerance=absolute_tolerance)
             for key, value in expected.items()
         )
     return actual == expected
@@ -1008,7 +1014,7 @@ def _check_forbidden_evidence(spec: TaskSpec, kinds: set[str]) -> CheckResult:
 def _check_expected_values(spec: TaskSpec, payload: Mapping[str, Any]) -> CheckResult:
     """``expected_values``: gold values by dotted path, with tolerance (3.3 #5)."""
 
-    if not spec.expected_values:
+    if not spec.expected_values and spec.result_contract is None:
         return _result(
             "expected_values", True, "the gold fixes no value", expected={}, actual={}
         )
@@ -1027,12 +1033,29 @@ def _check_expected_values(spec: TaskSpec, payload: Mapping[str, Any]) -> CheckR
             problems.append(f"{key}: path not present in the payload")
             continue
         observed[key] = actual
+        if spec.result_contract is not None and key in {
+            spec.result_contract.columns_path, spec.result_contract.rows_path
+        }:
+            # The contract aligns named columns before comparing ordered cells.
+            continue
         tolerance = spec.tolerance_for(key)
-        if not _values_match(actual, expected, tolerance):
+        absolute = spec.values_absolute_tolerance.get(key, spec.values_absolute_tolerance.get("*", 0.0))
+        if not _values_match(actual, expected, tolerance, absolute_tolerance=absolute):
             problems.append(
                 f"{key}: observed {_format_value(actual)}, expected "
-                f"{_format_value(expected)} (relative tolerance {tolerance:g})"
+                f"{_format_value(expected)} (relative tolerance {tolerance:g}, absolute tolerance {absolute:g})"
             )
+    if spec.result_contract is not None:
+        from queryforge.evaluation.results import compare_results, cells_match
+        contract = spec.result_contract
+        found_columns, columns = payload_path(payload, contract.columns_path)
+        found_rows, rows = payload_path(payload, contract.rows_path)
+        expected_rows = spec.expected_values.get(contract.rows_path)
+        expected_columns = spec.expected_values.get(contract.columns_path) or contract.required_columns
+        if (not found_columns or not found_rows or expected_rows is None or not expected_columns
+                or not compare_results(rows, columns, expected_rows, expected_columns, contract=contract,
+                    cell_match=lambda a, e: cells_match(a, e, spec.tolerance_for(contract.rows_path)))):
+            problems.append("result_contract: required columns, row positions/order or empty-result policy mismatched")
     detail = (
         f"all {len(spec.expected_values)} gold value(s) matched"
         if not problems
@@ -1049,6 +1072,28 @@ def _check_expected_values(spec: TaskSpec, payload: Mapping[str, Any]) -> CheckR
         detail,
         expected=dict(spec.expected_values),
         actual={"observed": observed, "missing": missing},
+    )
+
+
+def _check_sql_sources(spec: TaskSpec, payload: Mapping[str, Any]) -> CheckResult | None:
+    """Opt-in independent source coverage; matching values alone are insufficient."""
+
+    if not spec.required_sql_tables:
+        return None
+    coverage = check_sql_sources(payload.get("sql"), spec.required_sql_tables)
+    detail = (
+        "all required physical sources are active in the final SQL"
+        if coverage.passed else
+        f"SQL source coverage is unverified: {coverage.reason}"
+        if not coverage.verified else
+        f"required physical source(s) missing: {_preview(coverage.missing_tables)}"
+    )
+    return _result(
+        "sql_sources", coverage.passed, detail,
+        expected=list(spec.required_sql_tables),
+        actual={"verified": coverage.verified, "active_tables": list(coverage.active_tables),
+                "missing_tables": list(coverage.missing_tables)},
+        reason=coverage.reason,
     )
 
 
@@ -1744,6 +1789,7 @@ def evaluate_task(
     denied, denial_signals = policy_denial(payload, trace.tool_calls)
     usage = usage_accounting(trace)
     cost, cost_basis = cost_accounting(trace, usage, price_table)
+    source_check = _check_sql_sources(spec, payload)
 
     checks: list[CheckResult] = [
         _check_trace_available(trace),
@@ -1752,6 +1798,7 @@ def evaluate_task(
         _check_required_evidence(spec, kinds, entries),
         _check_forbidden_evidence(spec, kinds),
         _check_expected_values(spec, payload),
+        *([source_check] if source_check is not None else []),
         _check_evidence_anchor(spec, view, known_ids),
         _check_tool_legality(spec, trace),
         _check_tool_validity(spec, trace, steps),

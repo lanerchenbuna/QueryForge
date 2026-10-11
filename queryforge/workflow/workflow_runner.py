@@ -670,6 +670,7 @@ class WorkflowRunner:
                         preview_limit=self.parallel_preview_limit,
                         preview_timeout_seconds=self.parallel_preview_timeout_seconds,
                         selector_weights=self.selector_weights,
+                        cancel_check=self.cancel_check,
                     )
                     if self.parallel_candidates > 1
                     else None

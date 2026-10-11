@@ -269,6 +269,10 @@ class SemanticModelLoader:
                     "in expression"
                 )
             expressions = [metric.expression, *metric.default_filters]
+            if metric.analysis:
+                for dimension in metric.analysis.non_additive_dimensions:
+                    if dimension not in metric.allowed_dimensions:
+                        errors.append(f"metric {metric.name!r} non-additive dimension {dimension!r} must be allowed")
             for expression in expressions:
                 references = cls._extract_physical_references(expression)
                 if not references:
@@ -665,7 +669,14 @@ class SemanticModelLoader:
 
     @staticmethod
     def match_metrics(model: SemanticModel, question: str) -> list[MetricMatch]:
-        normalized_question = SemanticModelLoader._normalize(question)
+        from queryforge.domain.semantic.request_contract import measure_intent
+
+        intent = measure_intent(question)
+        # Contextual mentions and output labels are not requested measures.
+        intent = re.sub(r"\b(?:across|over) all \w+\b", "", intent, flags=re.I)
+        normalized_question = SemanticModelLoader._normalize(intent)
+        count_request = bool(re.search(r"\b(?:how many|count|number of)\b|数量|多少", intent, re.I))
+        detail_request = bool(re.search(r"\b(?:list|show)\b.*\b(?:identifiers|ids)\b|编号列表", intent, re.I))
         candidates: list[tuple[int, int, MetricMatch]] = []
         for metric_index, metric in enumerate(model.metrics):
             matching_terms = [
@@ -675,6 +686,13 @@ class SemanticModelLoader:
             ]
             if matching_terms:
                 term = max(matching_terms, key=lambda item: len(item))
+                explicit = SemanticModelLoader._contains_term(normalized_question, metric.name)
+                if not explicit and detail_request and metric.aggregation == "count":
+                    continue
+                if not explicit and count_request and metric.aggregation == "ratio" and not re.search(
+                    r"\b(?:average|avg|rate|ratio|aov|ctr)\b|平均|比例|率", intent, re.I
+                ):
+                    continue
                 candidates.append(
                     (
                         -len(SemanticModelLoader._normalize(term)),
@@ -683,7 +701,20 @@ class SemanticModelLoader:
                     )
                 )
         candidates.sort(key=lambda item: (item[0], item[1]))
-        return [item[2] for item in candidates[:3]]
+        # Prefer a specific phrase over an embedded generic synonym (e.g. sales).
+        selected = []
+        for _, _, match in candidates:
+            term = SemanticModelLoader._normalize(match.matched_term)
+            occurrences = [(item.start(), item.end()) for item in re.finditer(
+                rf"(?<!\w){re.escape(term)}(?!\w)", normalized_question)]
+            covered = [(item.start(), item.end()) for other in selected
+                       for item in re.finditer(rf"(?<!\w){re.escape(SemanticModelLoader._normalize(other.matched_term))}(?!\w)", normalized_question)
+                       if len(SemanticModelLoader._normalize(other.matched_term)) > len(term)]
+            if occurrences and all(any(left <= start and end <= right for left, right in covered)
+                                   for start, end in occurrences):
+                continue
+            selected.append(match)
+        return selected
 
     @staticmethod
     def _validate_columns(

@@ -39,6 +39,7 @@ class ParallelCandidatesNode(Node):
         preview_limit: int = 20,
         preview_timeout_seconds: float = 10,
         selector_weights: dict[str, float] | None = None,
+        cancel_check=None,
     ) -> None:
         if candidate_count < 2 or candidate_count > self.MAX_CANDIDATES:
             raise ValueError(
@@ -47,15 +48,19 @@ class ParallelCandidatesNode(Node):
         self.llm = llm
         self.database_tool = database_tool
         self.candidate_count = candidate_count
+        self.cancel_check = cancel_check
         self.selector = SQLSelector(
             database_tool,
             max_preview=max_preview,
             preview_limit=preview_limit,
             timeout_seconds=preview_timeout_seconds,
             weights=selector_weights,
+            cancel_check=cancel_check,
         )
 
     def execute(self, context: Context) -> NodeResult:
+        if self.cancel_check and self.cancel_check():
+            return self.failure("Candidate generation cancelled.")
         prompt = GenSqlNode._build_prompt(context)
         candidates: list[dict | None] = [None] * self.candidate_count
         started = time.monotonic()
@@ -68,6 +73,10 @@ class ParallelCandidatesNode(Node):
                 for index in range(self.candidate_count)
             }
             for future in as_completed(futures):
+                if self.cancel_check and self.cancel_check():
+                    for pending in futures:
+                        pending.cancel()
+                    return self.failure("Candidate generation cancelled.")
                 index = futures[future]
                 try:
                     candidates[index] = future.result()
@@ -136,10 +145,13 @@ class ParallelCandidatesNode(Node):
             preview_limit=self.selector.preview_limit,
             timeout_seconds=self.selector.timeout_seconds,
             weights=self.selector.weights,
+            cancel_check=self.cancel_check,
         )
 
     def _generate_candidate(self, prompt: str, index: int) -> dict:
         started = time.monotonic()
+        if self.cancel_check and self.cancel_check():
+            return self._generation_error(index, RuntimeError("Candidate generation cancelled."), started)
         try:
             payload = self.llm.generate_json(
                 prompt

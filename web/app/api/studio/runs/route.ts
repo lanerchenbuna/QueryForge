@@ -1,5 +1,6 @@
 import { requireStudioUser } from "@/app/studio-auth";
 import { ensureStudioSchema, getStudioBindings } from "@/db/runtime";
+import { encodeSnapshot, expiredSnapshot, SNAPSHOT_RETENTION_DAYS } from "@/app/lib/run-snapshot";
 
 const RUN_STATUSES = new Set([
   "success",
@@ -25,6 +26,15 @@ export async function GET(request: Request) {
     const includeDemo = url.searchParams.get("include_demo") === "1";
     const { db } = getStudioBindings();
     await ensureStudioSchema(db);
+    const runId = url.searchParams.get("run_id");
+    if (runId) {
+      if (!domainId) return Response.json({ detail: "Replay requires a data domain." }, { status: 400 });
+      const saved = await db.prepare("SELECT domain_id, output_json, data_version, expires_at FROM studio_runs WHERE id = ? AND domain_id = ?")
+        .bind(runId, domainId).first<{ domain_id: string; output_json: string | null; data_version: string | null; expires_at: string | null }>();
+      if (!saved) return Response.json({ detail: "Run not found in this data domain." }, { status: 404 });
+      if (!saved.output_json || expiredSnapshot(saved.expires_at)) return Response.json({ detail: "Run snapshot expired or was not retained." }, { status: 410 });
+      return Response.json({ run: JSON.parse(saved.output_json), data_version: saved.data_version }, { headers: { "cache-control": "no-store" } });
+    }
     const conditions: string[] = [];
     const params: string[] = [];
     if (domainId) {
@@ -37,7 +47,7 @@ export async function GET(request: Request) {
     const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
     const statement = db.prepare(
       `SELECT id, domain_id, question, status, model, row_count, duration,
-              created_at
+              created_at, is_demo, data_version
        FROM studio_runs${where}
        ORDER BY created_at DESC
        LIMIT 50`,
@@ -71,6 +81,8 @@ export async function POST(request: Request) {
       rowCount?: number;
       duration?: string;
       isDemo?: boolean;
+      snapshot?: unknown;
+      dataVersion?: string;
     };
     const domainId = payload.domainId?.trim() ?? "";
     const question = payload.question?.trim() ?? "";
@@ -124,6 +136,11 @@ export async function POST(request: Request) {
     } else {
       id = crypto.randomUUID();
     }
+    let snapshot: string | null;
+    try { snapshot = encodeSnapshot(payload.snapshot, id, status); }
+    catch (error) { return Response.json({ detail: String(error) }, { status: 400 }); }
+    const dataVersion = (payload.dataVersion ?? "").slice(0, 200);
+    const expiresAt = snapshot ? new Date(Date.now() + SNAPSHOT_RETENTION_DAYS * 86400_000).toISOString() : null;
 
     const { db } = getStudioBindings();
     await ensureStudioSchema(db);
@@ -141,8 +158,9 @@ export async function POST(request: Request) {
     await db
       .prepare(
         `INSERT INTO studio_runs (
-          id, domain_id, question, status, model, row_count, duration, is_demo
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          id, domain_id, question, status, model, row_count, duration, is_demo,
+          output_json, data_version, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO NOTHING`,
       )
       .bind(
@@ -154,8 +172,11 @@ export async function POST(request: Request) {
         payload.rowCount ?? 0,
         duration,
         payload.isDemo === true ? 1 : 0,
+        snapshot, dataVersion, expiresAt,
       )
       .run();
+    const saved = await db.prepare("SELECT domain_id FROM studio_runs WHERE id = ?").bind(id).first<{domain_id: string}>();
+    if (saved?.domain_id !== domainId) return Response.json({ detail: "Run id already belongs to another data domain." }, { status: 409 });
     return Response.json({ status: "saved", id }, { status: 201 });
   } catch (error) {
     return Response.json(

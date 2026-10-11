@@ -1,0 +1,244 @@
+{
+  "date": "2026-10-11",
+  "scope": "local_single_user_phase4",
+  "git_head": "d1e1e4f8ef95dfdf16bf7206ddcb797fa881eb4a",
+  "dirty": true,
+  "versions": {
+    "python": "3.12.11",
+    "sqlite": "3.50.4",
+    "sqlglot": "28.10.1",
+    "pydantic": "2.13.4",
+    "node": "v23.11.0"
+  },
+  "frontend_source_sha256": "b8a75255925a3c44a62b0c6d8484e41b1791cc7846fc4fcf9a0d574e4e1fd977",
+  "offline_comparison": {
+    "before_command": "LOG_LEVEL=CRITICAL .venv/bin/python -B scripts/benchmark_agent.py --tier 1 --tasks-dir evaluation/live_tasks_v3 --split dev --split regression --split holdout --report /tmp/queryforge_phase4_live_v3.json --gate",
+    "after_command": "LOG_LEVEL=CRITICAL .venv/bin/python -B scripts/benchmark_agent.py --tier 1 --tasks-dir evaluation/live_tasks_v3 --split dev --split regression --split holdout --parallel-candidates 1 --skill-mode auto --report /tmp/queryforge_phase4_live_v3_final.json --gate",
+    "before": {
+      "controls": {
+        "parallel_candidates": null,
+        "skill_mode": "auto",
+        "history_top_k": 0,
+        "vector_kb": false,
+        "today": "2024-12-31"
+      },
+      "effective_parallel_candidates": 1,
+      "provenance": {
+        "source_sha256": "83e6adde9def7439bb9823901846bbe5503c2bf3e6ac5168a531a1b589423a20",
+        "assets_sha256": "06ad2b4d54be3939d1e6bed8641c72b18fcb7192d9e88d07967e5cc86801d2b3",
+        "datasets_sha256": {
+          "anime_streaming": "e5c53343b0d3cee46cbc02610353c60e2b909fd61c1e1fee16c222771e7ecfb8",
+          "retail_orders": "04a18a5d5bc8118eae21b88a4159c1857f3caf86d5b0eb527e41a395f855543f",
+          "support_tickets": "95829871b3525ed67256cfa7297c01c11d4ade01cacfe6a0436769b89e6065ad"
+        },
+        "contracts_sha256": {
+          "anime_streaming": {
+            "semantic_model": "fa6d790e860c2481104fe2bab3a18f3d0809e1bcb20c6f09d9be339b782d1124",
+            "sql_policy": "a6817e5927206348ba833acc886ae8fdacd452f585ed1d489a3c86ecd1d00a01"
+          },
+          "retail_orders": {
+            "semantic_model": "46238e583ffb49136286b0566a032eddfbf6981b4f51376a0c44a309d995b167",
+            "sql_policy": "70ca076acf9ef843cc71d60b2661689abe2f803e9afc75f8e47402d9e726b27a"
+          },
+          "support_tickets": {
+            "semantic_model": "66ca8903dd1406214dbd17239be34c86d88d8996fd1d679d6da41714ba575c9c",
+            "sql_policy": "003e02d935e1d5f5059dabf0b3606b7444e7ab1cdbbbf0f7c1be0aa0cd5c625f"
+          }
+        },
+        "gold_sha256": "50573fa619a41660f7f548cb38598b42dc204f92708622b5b589edf1f1c01842",
+        "threshold_sha256": "0fb92fd7fe8bbcb90187461214358336b8ef7767ed392bf6d85fc35aa8a4143c",
+        "git_head": "d1e1e4f8ef95dfdf16bf7206ddcb797fa881eb4a",
+        "dirty": true
+      },
+      "task_count": 23,
+      "passed_tasks": 23,
+      "threshold_violations": [],
+      "model_calls": 72,
+      "usage": {
+        "recorded_tasks": 23,
+        "unmeasured_tasks": [],
+        "measured_tasks": 0,
+        "estimated_tasks": 23,
+        "measured_tokens": 0,
+        "estimated_tokens": 299851,
+        "total_tokens": 299851,
+        "complete": true
+      },
+      "last_turn_skill_router_model_spans": 23
+    },
+    "after": {
+      "controls": {
+        "parallel_candidates": 1,
+        "skill_mode": "auto",
+        "history_top_k": 0,
+        "vector_kb": false,
+        "today": "2024-12-31"
+      },
+      "effective_parallel_candidates": 1,
+      "provenance": {
+        "source_sha256": "37691987be54e082f14a271c07801492fede4f45b6961f1205fd290b26a26b4f",
+        "assets_sha256": "aefff53a4c821b5ea4ddc726cca5b022e476c25ec4f992ed5bffd185849ef225",
+        "datasets_sha256": {
+          "anime_streaming": "e5c53343b0d3cee46cbc02610353c60e2b909fd61c1e1fee16c222771e7ecfb8",
+          "retail_orders": "04a18a5d5bc8118eae21b88a4159c1857f3caf86d5b0eb527e41a395f855543f",
+          "support_tickets": "95829871b3525ed67256cfa7297c01c11d4ade01cacfe6a0436769b89e6065ad"
+        },
+        "contracts_sha256": {
+          "anime_streaming": {
+            "semantic_model": "fa6d790e860c2481104fe2bab3a18f3d0809e1bcb20c6f09d9be339b782d1124",
+            "sql_policy": "a6817e5927206348ba833acc886ae8fdacd452f585ed1d489a3c86ecd1d00a01"
+          },
+          "retail_orders": {
+            "semantic_model": "46238e583ffb49136286b0566a032eddfbf6981b4f51376a0c44a309d995b167",
+            "sql_policy": "70ca076acf9ef843cc71d60b2661689abe2f803e9afc75f8e47402d9e726b27a"
+          },
+          "support_tickets": {
+            "semantic_model": "66ca8903dd1406214dbd17239be34c86d88d8996fd1d679d6da41714ba575c9c",
+            "sql_policy": "003e02d935e1d5f5059dabf0b3606b7444e7ab1cdbbbf0f7c1be0aa0cd5c625f"
+          }
+        },
+        "gold_sha256": "50573fa619a41660f7f548cb38598b42dc204f92708622b5b589edf1f1c01842",
+        "threshold_sha256": "0fb92fd7fe8bbcb90187461214358336b8ef7767ed392bf6d85fc35aa8a4143c",
+        "git_head": "d1e1e4f8ef95dfdf16bf7206ddcb797fa881eb4a",
+        "dirty": true
+      },
+      "task_count": 23,
+      "passed_tasks": 23,
+      "threshold_violations": [],
+      "model_calls": 51,
+      "usage": {
+        "recorded_tasks": 23,
+        "unmeasured_tasks": [],
+        "measured_tasks": 0,
+        "estimated_tasks": 23,
+        "measured_tokens": 0,
+        "estimated_tokens": 276994,
+        "total_tokens": 276994,
+        "complete": true
+      },
+      "last_turn_skill_router_model_spans": 3
+    },
+    "limitations": [
+      "ScriptedModel supplies reference SQL; contracts measure engineering control flow, not real-model accuracy.",
+      "Before count is implicit offline default 1, after count is explicit 1; no candidate-selection payload in either run.",
+      "Calls include the multi-turn task; last-turn spans do not count its earlier router.",
+      "Source differs by phase4 follow-up fixes as well as keyword assets; this is a version observation, not a single-factor randomized ablation.",
+      "Tokens are local estimates; zero measured calls, no billed-token/cost or latency inference."
+    ]
+  },
+  "verification": {
+    "python": {
+      "command": "./init.sh",
+      "tests": 1105,
+      "passed": 1080,
+      "skipped": 25,
+      "failed": 0,
+      "exit_code": 0,
+      "duration_seconds": 110.68
+    },
+    "repository": {
+      "command": "make check",
+      "checks": 13,
+      "passed": 13,
+      "exit_code": 0
+    },
+    "semantic": {
+      "command": "make semantic-check",
+      "checks": 86,
+      "passed": 86,
+      "exit_code": 0
+    },
+    "studio": {
+      "command": "make web-check",
+      "tests": 31,
+      "passed": 31,
+      "failed": 0,
+      "exit_code": 0
+    },
+    "tier1": {
+      "command": "LOG_LEVEL=CRITICAL .venv/bin/python -B scripts/benchmark_agent.py --tier 1 --split dev --split regression --split holdout --report /tmp/queryforge_phase4_tier1_all.json --gate",
+      "passed": 32,
+      "tasks": 32,
+      "exit_code": 0
+    },
+    "diagnostics": {
+      "command": "LOG_LEVEL=CRITICAL .venv/bin/python -B scripts/benchmark_agent.py --tier 1 --tasks-dir evaluation/diagnostics --split dev --split regression --split holdout --report /tmp/queryforge_phase4_diagnostics.json --gate",
+      "passed": 3,
+      "tasks": 3,
+      "exit_code": 0
+    }
+  },
+  "http_acceptance_command": ".venv/bin/python -B scripts/check_local_studio.py --report /tmp/queryforge_phase4_studio_acceptance.json",
+  "http_acceptance": {
+    "mode": "offline_model_real_studio_and_database",
+    "checks": [
+      "explicit_offline_fixture",
+      "unreviewed_upload_denied",
+      "invalid_contract_not_published",
+      "invalid_parquet_physically_rejected",
+      "parquet_physical_publication",
+      "physical_publication",
+      "ready_domain_after_publication",
+      "physical_count_oracle",
+      "physical_sum_oracle",
+      "unpublished_domain_denied",
+      "domain_path_override_denied",
+      "write_sql_denied",
+      "write_rejection_keeps_data",
+      "snapshot_replay",
+      "replay_zero_model_calls",
+      "cross_domain_replay_and_id_conflict_denied",
+      "cross_origin_denied",
+      "sse_terminal_protocol_and_oracle",
+      "sse_gapless_sequence",
+      "sse_disconnect_persisted_cancelled",
+      "cancelled_run_has_no_execution_artifact",
+      "backend_offline_guard",
+      "expired_report_denied_dry_run_preserves",
+      "expired_report_reversibly_quarantined"
+    ],
+    "passed": 24,
+    "domain_id": "domain_a406888339c3472e801a6d9911cc9e87",
+    "unpublished_domain_id": "domain_9e5770085d0846ed9c9420f5ce38a1fe",
+    "run_id": "qf_a1bcca15f2af461c88a33298b29820e5",
+    "data_version": "20261011T153743Z-56343c26-d11136ae",
+    "parquet_domain_id": "domain_a72f23df01714f43a2baf58b6a7af258",
+    "cancelled_run_id": "qf_71a8fbce73734b13aa7e9e0c1f0e94f9",
+    "cancelled_state": "/tmp/queryforge_phase4_fixture/backend/runs/qf_71a8fbce73734b13aa7e9e0c1f0e94f9/state.json",
+    "fixture_sha256": "dee5cdbdf6639eeeb32fab8ba5e80790380c3b343116e2e633629e08c66f9bbe",
+    "oracle": {
+      "count": 3,
+      "sum": 60
+    },
+    "real_provider_calls": 0,
+    "duration_seconds": 21.05
+  },
+  "browser_acceptance": {
+    "browser": "Chrome native CUA keyboard",
+    "domain_id": "domain_871fee4d1da7410897403ace61bdb5f8",
+    "run_id": "qf_cae93b3597c442c59553b42e8e085837",
+    "visible_rows": [
+      [
+        3
+      ]
+    ],
+    "visible_sql": "SELECT COUNT(DISTINCT record_id) AS n FROM uploaded_record",
+    "replay_toast": "Saved run replayed · data version 20261011T150141Z-56343c26-4af32079.",
+    "model_calls_before_replay": 24,
+    "model_calls_after_replay": 24,
+    "real_provider_calls": 0
+  },
+  "remaining_acceptance": [
+    {
+      "item": "complete_native_browser_upload_click_sequence",
+      "status": "pending",
+      "reason": "Synthetic CSV selected in native OS picker, but Open remained disabled; HTTP publication passed separately."
+    },
+    {
+      "item": "deepseek_phase4_quality_latency_and_measured_cost",
+      "status": "not_run",
+      "reason": "No new real API spend; requires separately authorized funded evaluation."
+    }
+  ],
+  "real_provider_calls": 0
+}

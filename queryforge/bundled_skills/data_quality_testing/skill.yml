@@ -3,3 +3,4 @@ description: Validate schema, uniqueness, completeness, validity, reconciliation
 allowed_nodes: [gen_sql, reflect, fix]
 enabled: false
 priority: 85
+selection_keywords: ["null", "missing", "duplicate", "freshness", "reconcile", "quality", "缺失", "重复", "质量"]

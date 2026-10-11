@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Literal
+from datetime import date
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -185,6 +187,97 @@ class ResolvedJoinPath(StrictSemanticModel):
     explicit: bool = False
 
 
+class RatioComponents(StrictSemanticModel):
+    """Aggregate both populations at the requested grain before division."""
+
+    numerator: str = Field(min_length=1)
+    denominator: str = Field(min_length=1)
+    scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+
+    @field_validator("numerator", "denominator")
+    @classmethod
+    def aggregate_expression(cls, value: str) -> str:
+        import sqlglot
+        from sqlglot import exp
+
+        nodes = [node for node in sqlglot.parse(value, read="sqlite") if node is not None]
+        if len(nodes) != 1 or any(marker in value for marker in (";", "--", "/*", "*/")):
+            raise ValueError("ratio components must be one expression without comments")
+        node = nodes[0]
+        # A component is one aggregate over rows, never an average of ratios or
+        # an unrelated subquery population. More complex definitions need review.
+        if not isinstance(node, (exp.Sum, exp.Count)) or any(
+            isinstance(child, (exp.Select, exp.Div, exp.AggFunc))
+            for child in node.walk() if child is not node
+        ):
+            raise ValueError("ratio components must be a single SUM or COUNT aggregate")
+        if any(not column.table or column.db or column.catalog for column in node.find_all(exp.Column)):
+            raise ValueError("ratio component columns must be qualified table.column references")
+        return node.sql(dialect="sqlite")
+
+    @property
+    def expression(self) -> str:
+        return (f"CAST({self.numerator} AS REAL) * {self.scale} / "
+                f"NULLIF({self.denominator}, 0)")
+
+
+class MetricTimeContract(StrictSemanticModel):
+    role: str = Field(min_length=1)
+    timezone: str = "UTC"
+    fiscal_year_start_month: int = Field(default=1, ge=1, le=12)
+    coverage_start: str | None = None
+    complete_through: str | None = None
+    require_complete_periods: bool = False
+
+    @field_validator("role")
+    @classmethod
+    def nonblank_role(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("time role must not be blank")
+        return value.strip()
+
+    @field_validator("timezone")
+    @classmethod
+    def supported_timezone(cls, value: str) -> str:
+        if value == "UTC":
+            return value
+        if not re.fullmatch(r"[+-](?:0\d|1[0-3]):[0-5]\d|[+-]14:00", value):
+            raise ValueError("SQLite time contracts support UTC or fixed offsets (+08:00); named DST zones are unsupported")
+        return value
+
+    @model_validator(mode="after")
+    def coverage_contract(self) -> "MetricTimeContract":
+        if bool(self.coverage_start) != bool(self.complete_through):
+            raise ValueError("coverage_start and complete_through must be declared together")
+        if self.require_complete_periods and not self.coverage_start:
+            raise ValueError("complete period enforcement requires declared coverage bounds")
+        if self.coverage_start:
+            start, end = date.fromisoformat(self.coverage_start), date.fromisoformat(self.complete_through)
+            if start > end:
+                raise ValueError("coverage_start must not exceed complete_through")
+        return self
+
+
+class MetricAnalysisContract(StrictSemanticModel):
+    unit: str = Field(min_length=1)
+    additivity: Literal["additive", "non_additive", "semi_additive"]
+    non_additive_dimensions: list[str] = Field(default_factory=list)
+    time: MetricTimeContract | None = None
+
+    @field_validator("unit")
+    @classmethod
+    def nonblank_unit(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("metric unit must not be blank")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def semi_additive_dimensions(self) -> "MetricAnalysisContract":
+        if self.additivity == "semi_additive" and not self.non_additive_dimensions:
+            raise ValueError("semi_additive metrics require non_additive_dimensions")
+        return self
+
+
 class SemanticMetric(OperationalContract):
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -195,6 +288,35 @@ class SemanticMetric(OperationalContract):
     default_filters: list[str] = Field(default_factory=list)
     allowed_dimensions: list[str] = Field(default_factory=list)
     time_field: str | None = None
+    ratio: RatioComponents | None = None
+    analysis: MetricAnalysisContract | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def materialize_ratio(cls, data):
+        if isinstance(data, dict) and data.get("ratio") is not None:
+            data = dict(data)
+            ratio = RatioComponents.model_validate(data["ratio"])
+            canonical = ratio.expression
+            if data.get("expression") and data["expression"] != canonical:
+                raise ValueError("ratio expression must match its declared components; omit expression to derive it")
+            data["expression"] = canonical
+        return data
+
+    @model_validator(mode="after")
+    def analysis_consistency(self) -> "SemanticMetric":
+        if self.ratio and self.aggregation != "ratio":
+            raise ValueError("ratio components require ratio aggregation")
+        if self.analysis:
+            distinct = bool(re.search(r"\bDISTINCT\b", self.expression, re.I))
+            if (self.aggregation == "ratio" or distinct) and self.analysis.additivity != "non_additive":
+                raise ValueError("ratios and distinct counts must be non_additive")
+            if self.analysis.time and not self.time_field:
+                raise ValueError("a time contract requires time_field")
+            if (self.analysis.time and self.time_field.endswith("_key")
+                    and self.analysis.time.timezone != "UTC"):
+                raise ValueError("date keys already represent calendar dates; timezone shifts require timestamps")
+        return self
 
     @field_validator("name", "description", "entity", "expression")
     @classmethod

@@ -16,6 +16,7 @@ cannot recursively trigger full agent runs.
 from __future__ import annotations
 
 import logging
+import json
 import re
 import threading
 import time
@@ -31,6 +32,7 @@ from queryforge.core.observability import (
     new_run_id,
     run_logging_context,
     start_span_recorder,
+    stable_digest,
 )
 from queryforge.core.schemas.models import DateContext
 from queryforge.domain.analysis import (
@@ -43,6 +45,10 @@ from queryforge.domain.analysis import (
 )
 from queryforge.domain.security import load_sql_policy
 from queryforge.domain.semantic import MetricMatch, SemanticModelContext, SemanticModelLoader
+from queryforge.domain.semantic.query_constraints import (
+    UnsupportedConstraint, bind_filters, extract_filters,
+)
+from queryforge.domain.semantic.sql_validator import QuerySpecCompiler
 from queryforge.infrastructure.db.adapters import open_database as SQLiteConnector
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 from queryforge.interfaces.transport_security import (
@@ -372,7 +378,14 @@ class AnalysisPlannerService:
             model_context = self._load_semantic_model(model_path, tools, text)
             request = self.build_request(text, model_context)
             date_context = self._date_context(text, request)
-            ambiguity = is_high_impact_ambiguity(text, request)
+            if request.is_blocked:
+                return self._clarification_payload(
+                    text, request, domain_id=domain_id,
+                    reason=request.unresolved_questions[0] if request.unresolved_questions else "unsupported_request",
+                    budget=budget,
+                )
+            intent_text, _ = extract_filters(text)
+            ambiguity = is_high_impact_ambiguity(intent_text, request)
             if ambiguity:
                 request.status = "blocked"
                 request.unresolved_questions = [
@@ -393,7 +406,28 @@ class AnalysisPlannerService:
                     reason="no_governed_metric_match",
                     budget=budget,
                 )
-            ungoverned = self._ungoverned_breakdown_terms(text, model_context)
+            metrics = [m for m in model_context.model.metrics if m.name in request.metric_ids]
+            problem = None
+            if request.time_range and (date_context is None or any(not m.time_field for m in metrics)):
+                problem = "unsupported_time_window: a resolved window and governed metric time field are required"
+            elif len(metrics) > 1 and (request.time_grain or request.comparison_baseline) and any(not m.time_field for m in metrics):
+                problem = "unsupported_metric_combination: time analysis requires a time field for every metric"
+            elif request.time_grain not in {None, "daily", "weekly", "monthly", "quarterly", "yearly"}:
+                problem = "unsupported_time_grain:" + str(request.time_grain)
+            elif (request.comparison_baseline or request.time_grain) and not self._time_dimension_ref(
+                model_context, metrics[0], next(e for e in model_context.model.entities if e.name == metrics[0].entity),
+                request.time_grain,
+            ):
+                problem = "unsupported_comparison: a governed time dimension is required"
+            if not problem and len(metrics) > 1 and (request.time_grain or request.comparison_baseline):
+                calendars = {(m.analysis.time.timezone, m.analysis.time.fiscal_year_start_month) if m.analysis and m.analysis.time else ("UTC", 1) for m in metrics}
+                if not self._shared_time_dimension_ref(model_context, metrics, request.time_grain) or len(calendars) != 1:
+                    problem = "unsupported_metric_combination: multi-metric periods require one shared time dimension, timezone and calendar"
+            if problem:
+                request.status = "blocked"
+                request.unresolved_questions.append(problem)
+                return self._clarification_payload(text, request, domain_id=domain_id, reason=problem, budget=budget)
+            ungoverned = self._ungoverned_breakdown_terms(intent_text, model_context)
             if ungoverned:
                 # The question asks for a breakdown the semantic model does not
                 # declare. Answering without it would return a different question's
@@ -435,7 +469,10 @@ class AnalysisPlannerService:
                     if persisted is not None:
                         analysis_plan = persisted
                         self._rebuild_registry_missing_steps(analysis_plan, registry)
+                self._require_request(analysis_plan, request, model_context, text)
                 resumer.save_plan(analysis_plan)
+            else:
+                self._require_request(analysis_plan, request, model_context, text)
             analysis_plan, unavailable = self._drop_unavailable_steps(
                 analysis_plan, registry, blocked=self._blocked_actions()
             )
@@ -452,7 +489,9 @@ class AnalysisPlannerService:
                 run_versions={
                     "data_version": data_version,
                     "semantic_version": (
-                        domain.semantic_version if domain is not None else None
+                        str(domain.semantic_version if domain is not None else model_context.model.version)
+                        + ":" + stable_digest(json.dumps({"model": model_context.model.model_dump(mode="json"),
+                            "ranges": [r.model_dump(mode="json") for r in date_context.ranges] if date_context else []}, sort_keys=True))
                     ),
                     "policy_version": (
                         domain.policy_version if domain is not None else None
@@ -528,24 +567,49 @@ class AnalysisPlannerService:
     ) -> AnalysisRequest:
         """Build the typed analysis intent using the public step-04 API."""
 
+        intent_text, filters, unresolved = question, [], []
+        try:
+            intent_text, filters = extract_filters(question)
+        except UnsupportedConstraint as exc:
+            unresolved.append(f"unsupported_filter: {exc}")
         metric_matches: list[MetricMatch] = (
-            SemanticModelLoader.match_metrics(model_context.model, question)
+            SemanticModelLoader.match_metrics(model_context.model, intent_text)
             if model_context is not None
             else []
         )
         dimensions = [
             match.semantic_name
-            for match in (model_context.matches if model_context is not None else [])
+            for match in (SemanticModelLoader.match_question(model_context.model, intent_text)
+                          if model_context is not None else [])
             if match.kind == "dimension"
         ]
+        if model_context is not None and metric_matches and filters:
+            try:
+                filters = bind_filters(model_context.model, [m.metric for m in metric_matches], filters)
+            except UnsupportedConstraint as exc:
+                unresolved.append(f"unsupported_filter: {exc}")
+        grain = detect_time_grain(intent_text)
+        baseline = detect_comparison_baseline(intent_text)
+        if grain is None and baseline:
+            if baseline == "previous_month" or re.search(r"\bmom\b", intent_text, re.I):
+                grain = "monthly"
+            elif baseline == "previous_quarter" or re.search(r"\bqoq\b", intent_text, re.I):
+                grain = "quarterly"
+            elif baseline == "previous_year":
+                grain = "yearly"
+            elif baseline in {"previous_period", "same_period_last_year"}:
+                unresolved.append("unsupported_comparison: specify the calendar grain for this baseline")
         return AnalysisRequest(
             intent="analyze",
             metric_ids=[match.metric.name for match in metric_matches],
             dimensions=list(dict.fromkeys(dimensions)),
-            time_range=detect_time_range(question),
-            time_grain=detect_time_grain(question),
-            comparison_baseline=detect_comparison_baseline(question),
+            filters=[{"expression": f} for f in filters],
+            time_range=detect_time_range(intent_text),
+            time_grain=grain,
+            comparison_baseline=baseline,
             output="structured_analysis",
+            unresolved_questions=unresolved,
+            status="blocked" if unresolved else "valid",
         )
 
     def build_plan(
@@ -573,28 +637,85 @@ class AnalysisPlannerService:
             raise ValueError(
                 f"metric {metric_name!r} references unknown entity {metric.entity!r}"
             )
-        dimension_refs = self._dimension_refs(
-            model_context, request.dimensions, question
-        )
-        time_dimension = self._time_dimension_ref(model_context, metric, entity)
+        dimension_refs = self._analysis_dimension_refs(model_context, request, question)
+        time_dimension = self._time_dimension_ref(model_context, metric, entity, request.time_grain)
+        if len(request.metric_ids) > 1:
+            time_dimension = self._shared_time_dimension_ref(model_context,
+                [m for m in model_context.model.metrics if m.name in request.metric_ids], request.time_grain)
         template = self._select_template(
-            question, request, dimension_refs, time_dimension
+            extract_filters(question)[0], request, dimension_refs, time_dimension
         )
+        steps = self._template_steps(
+            template, metric_name, table, dimension_refs, request, time_dimension=time_dimension,
+        )
+        for step in steps:
+            if step.action == "query_metric":
+                step.inputs["metric_ids"] = list(request.metric_ids)
+                step.inputs["filters"] = list(request.filters)
+                if request.comparison_baseline:
+                    step.inputs["comparison_baseline"] = request.comparison_baseline
+                # Every declared join target is verified at execution time.
+                step.budget["max_tool_calls"] = 1 + len(model_context.model.entities) + len(request.metric_ids)
+            elif step.action == "compare_periods" and request.comparison_baseline:
+                step.inputs["comparison_baseline"] = request.comparison_baseline
+                if request.time_grain:
+                    step.inputs["time_grain"] = request.time_grain
+                step.budget["max_tool_calls"] = len(request.metric_ids)
+        if len(request.metric_ids) > 1 and template != "contribution":
+            # One query returns all compatible measures. Single-series analysis
+            # tools cannot interpret several measure columns, so do not invoke them.
+            steps = [s for s in steps if s.action not in {"drill_down", "render_chart"}]
+            steps[-1].depends_on = [s.id for s in steps if s.action in {"query_metric", "compare_periods"}]
+            steps[-1].validation["require_evidence"] = ["metric_resolution", "data_quality", "metric_value"]
+            for step in steps:
+                if step.action == "compare_periods":
+                    step.budget["max_tool_calls"] = len(request.metric_ids)
+        else:
+            selected_metric = next(m for m in model_context.model.metrics if m.name == metric_name)
+            metadata = QuerySpecCompiler._analysis_metadata(selected_metric, entity)
+            if metadata["additivity"] == "non_additive" or any(
+                ref in metadata["non_additive_dimensions"] for ref in dimension_refs
+            ):
+                # Recompute each group; never sum ratios or distinct counts.
+                steps = [s for s in steps if s.action != "drill_down"]
+                for step in steps:
+                    step.depends_on = [d for d in step.depends_on if d != "drill_down"]
+                    step.validation["require_evidence"] = [e for e in step.validation.get("require_evidence", []) if e != "drill_down"]
         return AnalysisPlan(
             plan_id=f"plan_{uuid4().hex[:10]}",
             task_id=f"task_{uuid4().hex[:10]}",
             question=question,
             domain_id=domain_id,
-            steps=self._template_steps(
-                template,
-                metric_name,
-                table,
-                dimension_refs,
-                request,
-                time_dimension=time_dimension,
-            ),
+            steps=steps,
             status="pending",
         )
+
+    def _require_request(
+        self, plan: AnalysisPlan, request: AnalysisRequest,
+        model_context: SemanticModelContext, question: str,
+    ) -> None:
+        """Bind delivery obligations even for caller-supplied or resumed plans."""
+        for step in plan.steps:
+            if step.action == "compose_answer":
+                first = next(m for m in model_context.model.metrics if m.name == request.metric_ids[0])
+                entity = next(e for e in model_context.model.entities if e.name == first.entity)
+                time_ref = self._time_dimension_ref(model_context, first, entity, request.time_grain)
+                dimensions = self._analysis_dimension_refs(model_context, request, question)
+                if len(request.metric_ids) > 1:
+                    time_ref = self._shared_time_dimension_ref(model_context,
+                        [m for m in model_context.model.metrics if m.name in request.metric_ids], request.time_grain)
+                # Inputs are included in journal fingerprints; validation-only
+                # metadata would allow a stale composed answer to be reused.
+                step.inputs["require_request"] = {
+                    "metric_ids": list(request.metric_ids),
+                    "filters": [f["expression"] for f in request.filters],
+                    "dimensions": dimensions,
+                    "comparison_baseline": request.comparison_baseline,
+                    "time_grain": request.time_grain,
+                    "time_range": request.time_range,
+                    "diagnosis": bool(request.comparison_baseline and request.time_grain
+                                      and any(ref != time_ref for ref in dimensions)),
+                }
 
     # ------------------------------------------------------------- templates
 
@@ -646,18 +767,20 @@ class AnalysisPlannerService:
     ) -> str:
         """Pick a deterministic task template from the typed request.
 
-        Ordered-series templates (trend/anomaly) require a resolvable time
-        dimension, because the governed compiler does not bucket timestamps.
+        Ordered-series templates require a resolvable time dimension. A requested
+        category breakdown must not be discarded in favour of a single series.
         """
         lowered = question.casefold()
+        if request.comparison_baseline and time_dimension and any(ref != time_dimension for ref in dimension_refs):
+            return "contribution"
         if time_dimension and any(marker in lowered for marker in cls._ANOMALY_MARKERS):
             return "anomaly"
-        has_time = bool(request.time_range) or bool(request.time_grain)
+        has_time = bool(request.time_grain or request.comparison_baseline)
         if not has_time and time_dimension and any(
             marker in lowered for marker in cls._TREND_MARKERS
         ):
             has_time = True
-        if time_dimension and has_time:
+        if time_dimension and has_time and all(ref == time_dimension for ref in dimension_refs):
             return "trend"
         if request.comparison_baseline and dimension_refs:
             return "contribution"
@@ -666,8 +789,10 @@ class AnalysisPlannerService:
         return "default"
 
     @staticmethod
-    def _time_dimension_ref(model_context: Any, metric: Any, entity: Any) -> str | None:
-        """The entity dimension whose column backs the metric's time field."""
+    def _time_dimension_ref(
+        model_context: SemanticModelContext, metric: Any, entity: Any, grain: str | None = None,
+    ) -> str | None:
+        """Resolve the metric's own time field or its governed calendar join."""
         if entity is None:
             return None
         time_field = getattr(metric, "time_field", None)
@@ -677,6 +802,51 @@ class AnalysisPlannerService:
         for dimension in getattr(entity, "dimensions", []):
             if dimension.column == column:
                 return f"{entity.name}.{dimension.name}"
+        period = {"daily": "date", "weekly": "date", "quarterly": "quarter", "yearly": "year"}.get(grain, "month")
+        for candidate in model_context.model.entities:
+            dimension = next((d for d in candidate.dimensions if d.name == period), None)
+            if dimension is None:
+                continue
+            path = SemanticModelLoader.resolve_join_path(model_context.model, entity.name, candidate.name)
+            if path is None or not path.safe:
+                continue
+            direct = QuerySpecCompiler._direct_time_join(
+                model_context, base_table=entity.table, metric_time_field=metric.time_field,
+                dimension_entity=candidate, join_paths=[path],
+            )
+            if direct is not None:
+                return f"{candidate.name}.{dimension.name}"
+        return None
+
+    @classmethod
+    def _analysis_dimension_refs(cls, context, request, question):
+        refs = cls._dimension_refs(context, request.dimensions, question)
+        if not request.time_grain:
+            return refs
+        metrics = [m for m in context.model.metrics if m.name in request.metric_ids]
+        entities = {e.name: e for e in context.model.entities}
+        temporal = {cls._time_dimension_ref(context, m, entities[m.entity], grain)
+                    for m in metrics for grain in ("daily", "monthly", "quarterly", "yearly")}
+        time_ref = cls._shared_time_dimension_ref(context, metrics, request.time_grain)
+        return list(dict.fromkeys(time_ref if ref in temporal and time_ref else ref for ref in refs))
+
+    @classmethod
+    def _shared_time_dimension_ref(cls, context, metrics, grain):
+        entities = {e.name: e for e in context.model.entities}
+        references = [cls._time_dimension_ref(context, m, entities[m.entity], grain) for m in metrics]
+        if len(set(references)) == 1:
+            return references[0]
+        common = set.intersection(*(set(m.allowed_dimensions) for m in metrics))
+        for reference in sorted(common):
+            entity_name, _, dimension_name = reference.partition(".")
+            target = entities[entity_name]
+            if dimension_name not in {"date", "month", "quarter", "year"}:
+                continue
+            if all(QuerySpecCompiler._direct_time_join(
+                context, base_table=entities[m.entity].table, metric_time_field=m.time_field,
+                dimension_entity=target, join_paths=[SemanticModelLoader.resolve_join_path(context.model, m.entity, target.name)],
+            ) for m in metrics):
+                return reference
         return None
 
     def _template_steps(
@@ -802,16 +972,25 @@ class AnalysisPlannerService:
                 ),
             ]
         if template == "contribution":
-            # Per-category two-period values are not queryable yet (the governed
-            # compiler groups by one dimension), so the plan compares aggregate
-            # periods and records the missing decomposition as a limitation.
+            if not time_dimension or not request.time_grain:
+                # Unsupported/ambiguous baselines keep the existing refusal path.
+                category_refs = dimension_refs
+            else:
+                category_refs = [time_dimension, *(ref for ref in dimension_refs if ref != time_dimension)]
             return [
                 resolved,
                 quality,
                 PlanStep(
+                    id="query_totals", action="query_metric",
+                    inputs={**metric_knobs, "dimensions": [time_dimension] if time_dimension else [],
+                            "result_role": "metric_totals", "limit": 100},
+                    depends_on=["check_data_quality"], expected_evidence=["metric_totals"],
+                    budget={"max_tool_calls": 2},
+                ),
+                PlanStep(
                     id="query_metric",
                     action="query_metric",
-                    inputs={**metric_knobs, "limit": 100},
+                    inputs={**metric_knobs, "dimensions": category_refs, "limit": 1000},
                     depends_on=["check_data_quality"],
                     expected_evidence=["metric_value"],
                     validation={"require_grain": dimension_refs},
@@ -820,19 +999,30 @@ class AnalysisPlannerService:
                 PlanStep(
                     id="compare_periods",
                     action="compare_periods",
-                    inputs={},
-                    depends_on=["query_metric"],
+                    inputs={"dataset_kind": "metric_totals"} if request.time_grain else {},
+                    depends_on=["query_totals"] if request.time_grain else ["query_metric"],
                     expected_evidence=["period_comparison"],
                     validation={"require_metric": metric_name, "knobs": metric_knobs},
                     budget={"max_tool_calls": 1},
                 ),
+                PlanStep(
+                    id="calculate_contribution", action="calculate_contribution", inputs={},
+                    depends_on=["query_metric", "compare_periods"], expected_evidence=["contribution"],
+                    budget={"max_tool_calls": len(request.metric_ids)},
+                ),
+                PlanStep(
+                    id="detect_anomaly", action="detect_anomaly", inputs={"dataset_kind": "metric_totals"},
+                    depends_on=["query_totals"], expected_evidence=["anomaly"],
+                    validation={"knobs": {"min_points": 4}}, budget={"max_tool_calls": len(request.metric_ids)},
+                ),
                 self._compose_step(
-                    ["query_metric", "compare_periods"],
+                    ["calculate_contribution", "detect_anomaly"],
                     [
                         "metric_resolution",
                         "data_quality",
                         "metric_value",
                         "period_comparison",
+                        "metric_totals", "contribution", "anomaly",
                     ],
                 ),
             ]
@@ -1036,7 +1226,8 @@ class AnalysisPlannerService:
         except Exception:  # pragma: no cover - planner must not depend on the workflow
             return None
         try:
-            ranges = DateParserNode.parse_rules(question, date.today())
+            intent_text, _ = extract_filters(question)
+            ranges = DateParserNode.parse_rules(intent_text, date.today())
         except Exception:  # pragma: no cover - a parser failure never blocks the run
             return None
         if not ranges:

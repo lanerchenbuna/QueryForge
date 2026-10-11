@@ -1,0 +1,14 @@
+{
+  "version": "deepseek-cny-2026-10-11-v4.1-flash-off-peak",
+  "currency": "CNY",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "source": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+  "checked_on": "2026-10-11",
+  "valid_from_utc": "2026-10-10T16:00:00+00:00",
+  "valid_until_utc": "2026-10-11T16:00:00+00:00",
+  "input_cache_hit_per_million": 0.02,
+  "input_cache_miss_per_million": 1.0,
+  "output_per_million": 4.0,
+  "basis": "Measured provider usage priced for Sunday in UTC+8; an estimate, not an invoice or foreign-exchange conversion."
+}

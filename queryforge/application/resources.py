@@ -90,10 +90,13 @@ class ResourceService:
             report_output_dir or config.report_output_dir
         ).expanduser().resolve()
         validate_report_root(config, report_output_dir)
-        path = root / f"{run_id}.html"
-        if not path.is_file():
-            raise ValueError(f"Report does not exist for run_id {run_id!r}")
-        return path
+        from queryforge.infrastructure.storage.report_store import ReportStore
+        return ReportStore(root, config.report_retention_days).report_path(run_id)
+
+    def expire_reports(self, *, dry_run: bool = True) -> dict:
+        from queryforge.infrastructure.storage.report_store import ReportStore
+        config = self.config_loader()
+        return ReportStore(config.report_output_dir, config.report_retention_days).expire(dry_run=dry_run)
 
     def list_skills(self) -> list[dict]:
         return [

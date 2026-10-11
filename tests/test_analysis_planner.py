@@ -733,9 +733,12 @@ class AnalysisPlannerServiceTest(unittest.TestCase):
         self.assertIn("GROUP BY items.category", value_evidence["payload"]["sql"])
         self.assertIsNotNone(value_evidence["payload"]["query_spec"])
 
-    def test_data_absence_triggers_bounded_replan_to_a_legal_dimension(self):
+    def test_data_absence_replans_but_cannot_complete_a_different_dimension(self):
         payload = self.fixture.analyze("How many items are there by brand_name?")
-        self.assertEqual(payload["status"], "succeeded")
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIsNone(payload["answer"])
+        compose = next(s for s in payload["steps"] if s["action"] == "compose_answer")
+        self.assertIn("request_incomplete: dimensions", compose["error"])
         self.assertEqual(len(payload["replan_reasons"]), 1)
         self.assertIn("brands.brand_name", payload["replan_reasons"][0])
         self.assertIn("items.category", payload["replan_reasons"][0])
@@ -957,7 +960,7 @@ class AnalysisPlannerServiceTest(unittest.TestCase):
         comparison = next(
             item for item in payload["evidence"] if item["kind"] == "period_comparison"
         )
-        self.assertEqual(comparison["payload"]["label"], "November -> December")
+        self.assertEqual(comparison["payload"]["label"], "2024-11 -> 2024-12")
 
         # Independent oracle: the same two periods computed straight from SQLite.
         connection = sqlite3.connect(database)

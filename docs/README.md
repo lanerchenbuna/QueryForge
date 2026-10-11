@@ -19,6 +19,8 @@ Start with whatever matches what you are trying to do.
 
 - [Agent team architecture](agent_team_architecture.md) — entry routing, orchestration, workflow
 - [Database adapters](database_adapters.md) — SQLite default; DuckDB and PostgreSQL optional
+- [Data Agent optimization roadmap](optimization_roadmap.md) — phased tasks, acceptance criteria and verification evidence
+- [Four-stage optimization results](optimization_results.md) — delivered capabilities, measured changes and remaining acceptance
 
 ## Data
 

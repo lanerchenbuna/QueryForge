@@ -17,6 +17,7 @@ from queryforge.interfaces.api.schemas import (
     SessionExpireRequest,
     SessionPreferenceRequest,
     SessionVersionInvalidationRequest,
+    ReportExpireRequest,
 )
 from queryforge.interfaces.gateway import GatewayAdapter
 from queryforge.interfaces.transport_security import request_api_key_matches
@@ -128,6 +129,14 @@ def create_app(service: AgentService | None = None):
             return JSONResponse(
                 {"detail": "Authentication required."}, status_code=401
             )
+        # Local browser clients use the Studio proxy. A foreign web origin must
+        # not be able to submit a simple multipart request directly to the
+        # unauthenticated loopback API (JSON preflight alone is insufficient).
+        if request.url.hostname in {"localhost", "127.0.0.1", "::1"}:
+            origin = request.headers.get("origin")
+            expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+            if (origin and origin != expected_origin) or request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse({"detail": "Cross-origin local API request denied."}, status_code=403)
         return await call_next(request)
 
     def call(operation: Callable[[], dict | list]):
@@ -299,6 +308,10 @@ def create_app(service: AgentService | None = None):
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/reports/expire")
+    def expire_reports(request: ReportExpireRequest):
+        return call(lambda: agent_service.expire_reports(dry_run=request.dry_run))
 
     @app.post("/gateway/webhook")
     def gateway_webhook(request: GatewayWebhookRequest):

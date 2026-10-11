@@ -21,6 +21,25 @@ The model demonstrates many-to-one relationships, a many-to-many bridge,
 self-referencing sequel and referral relationships, optional foreign keys, two
 role-playing user relationships, and governed multi-hop Join Paths.
 
+`watch_hours`, `completion_rate`, `unique_viewers`, and `average_rating` also declare
+units, additivity, event-time roles and enforced complete ingestion coverage for the
+synthetic 2023–2025 dataset. Completion rate and average rating expose aggregate ratio
+components. Multi-fact analysis aggregates each population separately; an analysis of
+watch hours and average rating may use a shared month grain without joining playback
+and rating detail rows. These sample coverage guarantees do not describe a live feed.
+
+Verified on 2026-10-10 with Python 3.12.11, SQLite 3.50.4, SQLGlot 28.10.1 and
+Pydantic 2.13.4:
+
+| Independent monthly oracle | 2024-02 | 2025-02 |
+| --- | ---: | ---: |
+| watch_hours | 1115.8683333333333 | 1117.3080555555555 |
+| average_rating | 7.38747680890538 | 7.261959957850369 |
+
+Reproduce the comparison and its independent SQL checks with
+`LOG_LEVEL=CRITICAL .venv/bin/python -B -m unittest tests.test_analysis_semantics.AnalysisSemanticsTest.test_bundled_cross_fact_comparison_matches_independent_sql -q`.
+This checks the deterministic analysis pipeline; it does not measure a model's capability.
+
 ## Files
 
 - `anime_streaming.sqlite` — ready-to-query database;

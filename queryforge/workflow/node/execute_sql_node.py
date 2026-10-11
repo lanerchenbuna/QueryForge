@@ -6,6 +6,7 @@ import time
 from queryforge.workflow.node.base import Node
 from queryforge.core.schemas.models import Context, NodeResult
 from queryforge.domain.semantic import SemanticSQLValidator
+from queryforge.domain.semantic.request_contract import validate_output_contract
 from queryforge.workflow.errors import record_error_category
 from queryforge.infrastructure.tools.database_tool import DatabaseTool
 
@@ -24,6 +25,11 @@ class ExecuteSqlNode(Node):
         if context.sql_context is None:
             return self.failure("No generated SQL is available")
         context.execution_result = None
+        projection_error = validate_output_contract(context.task.question, context.sql_context.sql)
+        if projection_error:
+            context.task_context["output_contract_error"] = projection_error
+            record_error_category(context, projection_error)
+            return self.failure(projection_error)
         join_contract_error = self._validate_join_contract(context)
         if join_contract_error:
             record_error_category(context, join_contract_error)

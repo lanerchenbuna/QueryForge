@@ -14,7 +14,7 @@ policy enforcement, bounded recovery, and production-friendly delivery interface
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-read--only-003B57?logo=sqlite&logoColor=white)
 ![SQLGlot](https://img.shields.io/badge/SQL%20policy-SQLGlot-6B4FBB)
-![Tests](https://img.shields.io/badge/tests-928%20passing-2EA44F)
+![Tests](https://img.shields.io/badge/tests-1080%20passed%2C%2025%20skipped-2EA44F)
 ![Offline acceptance](https://img.shields.io/badge/acceptance-13%2F13-7C3AED)
 
 </div>
@@ -31,34 +31,7 @@ semantic contract, and ask questions inside the same governance boundary.
 QueryForge combines that workflow with natural-language-to-SQL, AST-level
 security, read-only execution, bounded recovery, and complete run artifacts.
 
-> QueryForge currently targets SQLite and controlled environments. It is a
-> portfolio-grade reference architecture, not a multi-tenant analytics service.
-
-### Measured behaviour
-
-The governance layer is deterministic, so it is tested exhaustively offline; the
-model layer is not, so its numbers are reported separately and with their sample
-size. Both are reproducible from this repository.
-
-| What | Result | How |
-| --- | --- | --- |
-| Offline test suite | 928 passing, 25 skipped | `./init.sh` |
-| Offline acceptance gate | 13/13 checks | `make check` |
-| Deterministic agent benchmark | 23/23 tasks (`dev` + `regression` splits; the 9-task `holdout` split is requested explicitly) | `python scripts/benchmark_agent.py --tier 1 --gate` |
-| Real-model NL2SQL accuracy | **0.875** semantic correctness, 1.0 execution success | 40 cases, single run, `deepseek-v4-flash` |
-
-Two honest qualifications on that last row, because they matter more than the
-number:
-
-- It is **one run of 40 cases**. Differences of ±0.03 have been observed across
-  *identical* code, so this figure cannot resolve small changes.
-- It covers the anime sample domain only. It is evidence that the pipeline works
-  end to end on a real model, not a general accuracy claim.
-
-Tier-1's 23/23 measures the *engineering* chain (governance, execution, evidence,
-budgeting, failure classification), not model capability: a fixture supplies the
-SQL. See [NL2SQL evaluation](docs/nl2sql_evaluation.md) for the method and the
-frozen baselines.
+> Studio serves local single-user workflows with read-only SQLite analysis by default.
 
 ## Product Tour
 
@@ -99,34 +72,18 @@ delivery loop:
 | Integrate with other tools | Expose CLI, REST/SSE, MCP, gateway, JSON, charts, and HTML reports |
 | Start from raw data | Build governed SQLite assets from CSV, Parquet, and paginated JSON APIs |
 
-## Highlights
-
-- **Defense in depth** — candidates are checked before execution and revalidated
-  at the database boundary.
-- **Semantic contracts** — YAML models describe business metrics, entities,
-  relationships, cardinality, ownership, SLA, sensitivity, and quality rules.
-- **Adaptive workflow** — simple questions stay fast; complex questions can
-  activate a bounded tool loop.
-- **Read-only by default** — normal analysis opens SQLite databases in read-only
-  mode and rejects write or administrative SQL.
-- **Multiple delivery surfaces** — use the same application service through the
-  CLI, REST/SSE, MCP, or a webhook gateway.
-- **Reproducible evaluation** — the repository ships a 32-task deterministic agent
-  benchmark over three independent schemas and a 120-case, three-domain NL2SQL
-  gold set, with the frozen real-model baselines recorded in the docs.
-
 ## Quick Start
 
 ### 1. Install
 
-Requirements: **Python 3.11 or 3.12** and SQLite.
+Requirements: **Python 3.11 or 3.12**; Studio uses **Node.js 22**.
 
 ```bash
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
-cp .env.example .env
+cp -n .env.example .env
 ```
 
 ### 2. Configure a model
@@ -135,9 +92,8 @@ Set one provider in `.env`. OpenAI-compatible, Claude, Gemini, Qwen, DeepSeek,
 and GLM configurations are included.
 
 ```dotenv
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your-api-key
-OPENAI_MODEL=gpt-4.1-mini
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your-api-key
 ```
 
 Provider defaults and environment-variable mappings live in [`models.yml`](models.yml).
@@ -164,15 +120,13 @@ queryforge \
 
 ### Explore QueryForge Studio
 
-The repository includes a complete visual workspace for creating and switching
-data domains, onboarding domain-owned data, reviewing the required semantic
-layer, asking governed questions, inspecting SQL and Trust Trace evidence, and
-auditing domain-scoped run history.
+Create a domain, upload CSV/Parquet, review semantics and publish. Then query,
+inspect SQL and Trust Trace, or replay saved results bound to their data version.
 
 ```bash
 # Terminal 1: QueryForge API
-python -m pip install -e ".[api]"
-queryforge --serve-api
+python -m pip install -e ".[api,assets]"
+queryforge --serve-api --api-host 127.0.0.1 --api-port 8000
 
 # Terminal 2: QueryForge Studio
 make web-install
@@ -211,6 +165,7 @@ SQL candidate
   → dangerous-function checks
   → recursive CTE and cross-join checks
   → table, join, and LIMIT budgets
+  → measure, filter and active-output checks
   → governed preview
   → execution-boundary revalidation
 ```
@@ -250,28 +205,29 @@ metrics:
     sensitivity: internal
 ```
 
-Models can declare entities, dimensions, metrics, grain, relationships, join
-paths, fan-out constraints, operational metadata, and physical quality rules.
-QueryForge requires a validated model by default; it auto-discovers a model beside
-the database and rejects schema-only analysis unless the caller explicitly selects
-the diagnostic escape hatch.
+Models define entities, dimensions, measures, grain, relationships and quality
+rules. Queries require a validated model by default and auto-discover nearby YAML.
+Independent facts aggregate before joining; ratios use declared components, and
+each measure follows its event time, unit and reviewed coverage. Change diagnostics
+return category contributions, independently reconciled totals and evidence.
 
-In Studio, semantic construction is domain-first and gated:
+Studio onboarding follows:
 
 ```text
 Create/select domain
-  → upload domain-owned sources
-  → profile physical schema
-  → confirm entity identity and grain
-  → define dimensions, measures, metrics, and time
-  → review relationships, cardinality, and Join Paths
-  → classify sensitivity, ownership, policy, and quality
-  → validate 100% of blocking checks
-  → publish data + semantics atomically
+  → upload CSV/Parquet
+  → review entity, grain, dimensions and measures
+  → confirm owner and sensitivity
+  → validate physical data and semantic contracts
+  → publish data + semantics
 ```
 
-Technical names are treated as evidence, not business truth. A new domain starts
-empty and never inherits the Anime sample's entities or metrics.
+New domains start with an empty contract. Studio edits single-entity dimensions
+and measures; complete relationships, time and units are authored in YAML.
+Queries require successful physical publication. Skill prefiltering and
+content-version caches reduce unused context; repair and candidate previews have
+explicit budgets. History preserves the original domain and data version, while
+expired reports can be quarantined for recovery.
 
 Build or incrementally refresh one:
 
@@ -424,7 +380,7 @@ queryforge/
 evaluation/gold/       # Multi-domain NL2SQL evaluation cases
 evaluation/tasks/      # Deterministic agent-benchmark tasks (dev/regression/holdout)
 sample_data/           # Ready-to-run SQLite datasets and semantic models
-web/                   # QueryForge Studio and hosted persistence adapters
+web/                   # QueryForge Studio and local D1/R2 storage
 scripts/               # Build, benchmark, evaluation, and acceptance tools
 tests/                 # Unit, integration, boundary, and acceptance tests
 docs/                  # Architecture and feature documentation
@@ -434,56 +390,17 @@ docs/                  # Architecture and feature documentation
 Dependencies flow inward from interfaces and application code toward domain,
 infrastructure, and core contracts.
 
-## Quality and Evaluation
-
-Run the complete offline quality gate:
+## Development Checks
 
 ```bash
-./init.sh                # environment + 928-test suite + repository state
-make check               # repository hygiene + 13 offline acceptance checks
+./init.sh             # environment and offline tests
+make check            # repository hygiene and full acceptance
+make semantic-check   # semantic-model drift
+make web-check        # Studio lint, types, build and tests
 ```
 
-Live model evaluation reports execution success, semantic equivalence, policy
-precision/recall, latency, measured token usage, and projection tolerance:
-
-```bash
-python scripts/evaluate_sql.py \
-  --cases evaluation/gold/nl2sql_multidomain.jsonl \
-  --model-provider openai \
-  --output .queryforge/evaluations/openai.json
-```
-
-CI runs the offline acceptance gate (including the deterministic agent benchmark)
-on Python 3.11 and 3.12, plus an integration job that requires the optional
-transport dependencies. Real-model evaluation is a manual workflow
-(`.github/workflows/model-eval.yml`) because it spends money.
-
-## What is verified (and what is not)
-
-Every claim in this section is reproducible from the repository. The point of the
-table is the third column: what has *not* been shown is stated as plainly as what has.
-
-| Capability | How you can check it | Status |
-| --- | --- | --- |
-| Full offline test suite | `./init.sh` — **928 tests, 25 skipped, 0 failures** | verified |
-| Repository + integration gate | `make check` (`scripts/run_acceptance.py --full`, 13/13 checks) | verified |
-| End-to-end demos (upload → publish → query; semantic catch; multi-step analysis; transports/refusal/recovery) | `make demo` — five narrated, asserting scripts under `docs/demo/`, offline and key-free | verified |
-| Deterministic agent benchmark (32 gold tasks over 3 independent schemas, ablation, effect gate) | `python scripts/benchmark_agent.py --tier 1 --gate` | verified (23/23 — the `dev` + `regression` splits; the 9-task `holdout` split must be requested with `--split holdout`) |
-| Optional-dependency integration tier | `python scripts/benchmark_agent.py --tier 2 --gate` — a missing dependency **fails** the tier | verified with `.[api,mcp]` installed |
-| Real-model NL2SQL evaluation | `python scripts/evaluate_sql.py --cases evaluation/gold/nl2sql_multidomain.jsonl --model-provider <p> --model <m>` | **0.875 semantic correctness on 40 anime cases, one run, `deepseek-v4-flash`** — see the caveats above |
-| Automatic skill selection is worth its cost | `--skill-mode auto` vs `--skill-mode off` | **not established** — it costs +139% p50 latency and +44% output tokens with no measured accuracy benefit |
-| PostgreSQL backend | `pip install '.[postgres]'`, then `PostgresConnector` | **implemented, not verified** against a live server, and not exported from the package API |
-
-The demos and tier-1 are offline and deterministic: no model call, no network, no
-API key. The agent benchmark's tier 1 supplies the SQL as a fixture, so its 23/23
-measures the engineering chain — **not model accuracy**. Real-model numbers must
-come from a tier-3 run with credentials and are reported separately.
-
-Deployment level: **controlled environment, single tenant, read-only data access**.
-SQLite is the default backend; DuckDB and PostgreSQL adapters exist behind optional
-extras (see [Database adapters](docs/database_adapters.md)). The system is not
-hardened for arbitrary untrusted multi-tenant input; the honest blank spots are
-general-domain model accuracy and the PostgreSQL backend.
+Evaluation separates deterministic governance checks from real-model behaviour.
+See the [evaluation guide](docs/nl2sql_evaluation.md) for methods, results and limits.
 
 ## Documentation
 
@@ -510,37 +427,20 @@ general-domain model accuracy and the PostgreSQL backend.
 - [Code of conduct](CODE_OF_CONDUCT.md)
 - [Changelog](CHANGELOG.md)
 
-The source tree is ready for GitHub review and CI. The repository owner still needs
-to select and add a `LICENSE` before public release; no license has been assumed on
-their behalf.
+No open-source license has been declared.
 
-## Scope and Security
+## Deployment and Security
 
-QueryForge's guarantees apply to its configured SQLite execution boundary. The
-project does **not** currently include:
+Studio binds locally and enforces same-origin requests. Analysis permits read-only
+SQL. REST/MCP serve controlled environments; local credentials belong in the
+ignored `.env`.
 
-- production authentication, authorization, tenant isolation, or rate limiting;
-- durable distributed workflow recovery or token-level cancellation;
-- MySQL, warehouse, lakehouse, or streaming-system adapters (a PostgreSQL
-  connector exists but is neither exported from the package API nor verified
-  against a live server);
-- provider-normalized billing or a trained-model lifecycle.
+- `QUERYFORGE_API_KEY`: enable REST/Gateway request authentication.
+- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST`: restrict data and report roots.
+- `REPORT_RETENTION_DAYS`: set report access lifetime; the default is 30 days.
 
-Keep REST and MCP transports inside a controlled environment. Do not commit
-provider secrets, generated run state, or local databases containing sensitive data.
-
-Network transports can be hardened without code changes:
-
-- `QUERYFORGE_API_KEY` — when set, REST/Gateway endpoints (except `/health`)
-  require `Authorization: Bearer <key>` or `X-API-Key: <key>`.
-- `DATABASE_ALLOWLIST` / `REPORT_ROOT_ALLOWLIST` — comma-separated directories
-  that confine caller-supplied `database`/`semantic_model_path`/`sql_policy_path`
-  and report output paths. Without them, network transports fall back to the
-  project root plus the default database directory.
-
-`POST /ask/stream` delivers progress events followed by one terminal
-`final_result` event carrying the serialized answer (or an `error`); clients
-that disconnect cancel the run cooperatively at the next node boundary.
+SSE disconnects cancel cooperatively at execution boundaries. Domain history
+preserves its original data version. See [configuration](docs/configuration.md).
 
 ## Roadmap
 

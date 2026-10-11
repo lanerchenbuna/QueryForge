@@ -104,7 +104,7 @@ def main() -> int:
             f"delta={comparison.get('delta')}",
         )
         check(
-            "ORDER BY dim_date.month_number" in str(metric_payload.get("sql") or ""),
+            "ORDER BY STRFTIME('%Y-%m'" in str(metric_payload.get("sql") or ""),
             "the time series is ordered chronologically, not alphabetically",
             str(metric_payload.get("sql"))[-70:],
         )
@@ -116,9 +116,9 @@ def main() -> int:
         oracle = {
             name: round(float(value), 6)
             for name, value in _sql(
-                "SELECT d.month_name, SUM(w.watch_seconds)/3600.0 FROM fact_watch_session w "
+                "SELECT printf('%04d-%02d', d.year, d.month_number), SUM(w.watch_seconds)/3600.0 FROM fact_watch_session w "
                 "JOIN dim_date d ON d.date_key = w.watch_date_key "
-                "WHERE w.watch_date_key BETWEEN 20240101 AND 20241231 GROUP BY d.month_name"
+                "WHERE w.watch_date_key BETWEEN 20231201 AND 20241231 GROUP BY d.year, d.month_number"
             )
         }
         check(

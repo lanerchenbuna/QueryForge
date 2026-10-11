@@ -27,10 +27,29 @@ where a corresponding option exists.
 | `REPORT_MAX_ROWS` | `50` | Maximum rows embedded in report tables |
 | `REPORT_MAX_CHARTS` | `3` | Maximum rule-selected report charts |
 | `REPORT_OUTPUT_DIR` | `.queryforge/reports` | HTML and manifest destination |
+| `REPORT_RETENTION_DAYS` | `30` | Report access expires after this many days; configuration bounded to 1–3650 |
 
 Conversation memory is opt-in per request: pass `session_id` or `new_session`. Tool Loop,
 parallel candidates and Subject Tree are disabled/minimal by default; structured reasoning is
 optional in model output and never blocks a compatible response.
+
+## Local prompt-only skills
+
+`skill.yml` can declare `selection_keywords: ["quality", "null", "质量"]`.
+Automatic selection keeps enabled defaults and offers optional skills only when
+a keyword matches the question (case-insensitive substring). An empty list never
+offers that optional skill; omitting the field preserves the legacy catalogue.
+An explicit subject catalogue overrides this prefilter, and manual selection is
+unchanged. With no eligible optional skill, routing uses defaults without a model
+call while the reported mode remains `auto`. Keywords should cover the languages
+and terms used by the deployment; this is a heuristic, not semantic relevance proof.
+
+Metadata parsing is cached by actual file bytes (at most 128 entries). Rendered
+prompt context uses a 32-entry LRU keyed by directory, node, available metadata and
+loaded instruction content. Changed content with unchanged mtime invalidates the
+cache; deleted files fail closed. These caches contain prompt-only definitions,
+not SQL results or user/domain data. Candidate count defaults remain unchanged;
+invalid and duplicate candidates do not consume the bounded SQL preview budget.
 
 ## MCP
 
