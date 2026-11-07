@@ -32,26 +32,51 @@ NL2SQL、AST 级安全策略、只读执行、有界修复和完整运行产物�
 
 ## 产品界面
 
+Studio 面向 PC 端数据分析，提供固定侧栏、统一数据域切换和可保存的明暗主题。
+以下截图来自实际运行的本地界面，桌面视口为 **1440 × 1000**，展示内置的
+Anime Streaming 合成样例。分析结果和运行历史均保留 **DEMO** 标记，不代表真实模型运行。
+
 <div align="center">
   <img src="docs/assets/queryforge-studio-domains.png" width="100%" alt="QueryForge 数据域中心：创建和选择相互隔离的业务上下文">
-  <sub>数据域中心——先创建或选择治理边界，再接入该域的数据与语义。</sub>
+  <sub>数据域中心 · 创建或选择业务上下文，清晰呈现从数据接入到分析的操作路径。</sub>
 </div>
 
 <br>
 
 <div align="center">
   <img src="docs/assets/queryforge-studio-overview.png" width="100%" alt="QueryForge Studio 总览：语义契约健康度、业务指标与互动趋势">
-  <sub>数据域总览——Anime Streaming 只是当前选中的示例域，不再是平台身份。</sub>
+  <sub>深色总览 · 从业务问题出发，查看样例指标和契约状态，进入对应工作区。</sub>
 </div>
 
 <br>
 
 <div align="center">
-  <img src="docs/assets/queryforge-studio-semantic.png" width="49%" alt="QueryForge Semantic Studio 实体关系图和契约编辑器">
-  <img src="docs/assets/queryforge-studio-analysis.png" width="49%" alt="QueryForge 受治理分析结果、生成 SQL 与 Trust Trace">
-  <br>
-  <sub>语义建模工作台 &nbsp;·&nbsp; 带可审计 SQL 和 Trust Trace 的受治理分析</sub>
+  <img src="docs/assets/queryforge-studio-semantic.png" width="100%" alt="QueryForge 语义工作台：实体搜索、自动适配画布的关系图和只读样例契约检查器">
+  <sub>语义工作台 · 搜索实体和指标，缩放关系图，查看样例契约与业务定义。</sub>
 </div>
+
+<br>
+
+<div align="center">
+  <img src="docs/assets/queryforge-studio-analysis.png" width="100%" alt="QueryForge PC 分析界面：样例回答、结果图表、生成 SQL 和明确标识来源的 Trust Trace">
+  <sub>分析工作区 · 并排查看图表与 SQL，右侧逐项检查证据，演示来源始终可见。</sub>
+</div>
+
+<details>
+<summary>查看数据源与运行历史</summary>
+
+<br>
+
+<img src="docs/assets/queryforge-studio-sources.png" width="100%" alt="QueryForge 数据源概览、可搜索的物理表清单和原子发布流程">
+
+数据源页面集中展示物理表清单与语义发布步骤。上传 CSV 或 Parquet 后，在当前数据域内完成评审。
+
+<img src="docs/assets/queryforge-studio-runs.png" width="100%" alt="QueryForge 运行历史：状态筛选、问题搜索、演示标识和 JSON 历史导出">
+
+运行历史支持按问题和运行 ID 搜索、状态筛选、结果回放，以及当前数据域历史的 JSON 导出。
+失败和被策略拦截的结果保留原有状态。
+
+</details>
 
 ## 为什么是 QueryForge？
 
@@ -132,6 +157,19 @@ make web-dev
 打开 <http://localhost:3000>，从「Data Domains」进入：可选择内置 Anime Streaming
 示例域，也可创建一个完全空白的新域，然后只在当前域内上传数据。Python API 离线时，
 示例域分析会使用确定性的演示结果。详见 [Studio 使用指南](docs/studio.md)。
+
+PC 端的主要操作路径：
+
+1. **Data Domains**：选择样例或创建自己的业务数据域。
+2. **Data Sources**：上传 CSV 或 Parquet，检查采样结果、评审语义契约并发布。
+   内置样例模型在 Studio 中只读。
+3. **Semantic Studio**：搜索实体和指标，查看业务口径及已评审的 Join Path。
+4. **Ask & Analyze**：发起分析，切换图表与表格，检查 SQL 和 Trust Trace。
+   真实模型分析需要 Python API 和已配置的 Provider。
+5. **Run History**：搜索、筛选、导出或回放当前数据域的历史结果。
+
+顶部的太阳或月亮按钮可切换明暗主题，偏好保存在当前浏览器。弹窗支持键盘焦点导航，
+按 **Esc** 关闭并返回触发按钮。
 
 ## 系统架构
 

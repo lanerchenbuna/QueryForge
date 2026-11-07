@@ -17,6 +17,26 @@ make web-dev
 Open <http://localhost:3000>. Studio supports local single-user use.
 Demo results are labelled explicitly; a failed live request cannot become a demo success.
 
+## Desktop workspace
+
+Studio uses a persistent sidebar and a shared top bar for the active data domain,
+backend connection, appearance and runtime information. The sun or moon control
+switches light and dark themes; the choice is saved in the current browser.
+Geist text and Geist Mono code fonts are bundled with the application.
+
+- Data Sources filters the displayed sample table inventory by table name.
+- Semantic Studio searches entities and metrics. The relationship graph fits its
+  available width and supports zoom and fit controls. The bundled sample model
+  is read only; author model changes in YAML or review uploaded data in the wizard.
+- Ask & Analyze offers chart and table views, with SQL and Trust Trace beside the
+  result on wide desktop windows. Loading placeholders do not assert progress.
+- Run History searches questions and run IDs, filters by status, and exports the
+  active domain's history as JSON.
+
+Keyboard users can skip to the workspace. Dialogs keep focus inside, support
+Escape to close, and return focus to the trigger. See the [desktop screenshot
+gallery](../README.md#product-tour).
+
 For live execution, start the Python API in another terminal:
 
 ```bash

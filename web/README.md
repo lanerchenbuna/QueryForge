@@ -3,7 +3,7 @@
 The domain-first visual workspace for QueryForge. Users create or select a data
 domain, then onboard that domain's sources, build its mandatory semantic
 contract, run governed analysis, inspect SQL and trust evidence, and audit
-domain-scoped history in one responsive interface.
+domain-scoped history in one desktop workspace.
 
 ## Run locally
 
@@ -41,6 +41,16 @@ profiling, actual publication, snapshot expiry and reproducible offline checks.
 - **Ask & Analyze** — natural language to governed SQL with progress, results,
   export, and a complete Trust Trace.
 - **Run History** — filterable, domain-scoped history for audit and replay.
+
+The top bar includes a persistent light/dark appearance preference. Entity,
+metric, table and history searches operate locally on the displayed records;
+the relationship graph fits its available width. The bundled sample model is
+read only. Dialogs support keyboard focus navigation and Escape to close.
+
+The [product tour](../README.md#product-tour) shows actual desktop screenshots.
+Shared palette roles, spacing, radii and named text styles live in
+`app/design-system.css`; workspace layouts and component states live in
+`app/globals.css`.
 
 Data uploads are intentionally atomic: the upload endpoint refuses publication
 until a data domain is selected and its semantic contract has been reviewed and
