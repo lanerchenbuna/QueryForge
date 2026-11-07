@@ -35,26 +35,53 @@ security, read-only execution, bounded recovery, and complete run artifacts.
 
 ## Product Tour
 
+Studio is a desktop data workspace with persistent navigation, a shared domain
+switcher, and light and dark themes. The screenshots below show the running local
+interface at a 1440 × 1000 desktop viewport, using the synthetic Anime Streaming
+sample. Analysis and history are explicitly labelled as demo data, not live results.
+
 <div align="center">
   <img src="docs/assets/queryforge-studio-domains.png" width="100%" alt="QueryForge Data Domain Center for creating and selecting isolated business contexts">
-  <sub>Data Domain Center — create or select a governed context before adding data or semantics.</sub>
+  <sub>Data Domains · select a business context or create a new one, with the onboarding path in view.</sub>
 </div>
 
 <br>
 
 <div align="center">
   <img src="docs/assets/queryforge-studio-overview.png" width="100%" alt="QueryForge Studio overview with semantic health, business metrics, and engagement trends">
-  <sub>Domain overview — the Anime Streaming dataset is shown as one selected sample, not the platform identity.</sub>
+  <sub>Overview in dark mode · ask a question, inspect sample metrics, and open the semantic workspace.</sub>
 </div>
 
 <br>
 
 <div align="center">
-  <img src="docs/assets/queryforge-studio-semantic.png" width="49%" alt="QueryForge Semantic Studio entity relationship graph and contract editor">
-  <img src="docs/assets/queryforge-studio-analysis.png" width="49%" alt="QueryForge governed analysis result with generated SQL and Trust Trace">
-  <br>
-  <sub>Semantic Studio &nbsp;·&nbsp; Governed analysis with auditable SQL and Trust Trace</sub>
+  <img src="docs/assets/queryforge-studio-semantic.png" width="100%" alt="QueryForge Semantic Studio with searchable entities, an automatically fitted relationship graph, and a read only sample contract inspector">
+  <sub>Semantic Studio · explore entities, search metrics, zoom the relationship graph, and inspect the sample contract.</sub>
 </div>
+
+<br>
+
+<div align="center">
+  <img src="docs/assets/queryforge-studio-analysis.png" width="100%" alt="QueryForge desktop analysis with a demo answer, result chart, generated SQL, and clearly labelled Trust Trace">
+  <sub>Ask &amp; Analyze · compare the result chart and SQL beside the evidence panel. Demo provenance stays visible.</sub>
+</div>
+
+<details>
+<summary>Data sources and run history</summary>
+
+<br>
+
+<img src="docs/assets/queryforge-studio-sources.png" width="100%" alt="QueryForge data source summary, searchable table inventory, and atomic publication workflow">
+
+Data Sources keeps the physical inventory and semantic publication steps together.
+CSV and Parquet uploads open the review wizard inside the active domain.
+
+<img src="docs/assets/queryforge-studio-runs.png" width="100%" alt="QueryForge run history with status filters, question search, demo labels, and JSON history export">
+
+Run History supports question and run ID search, status filters, replay, and JSON
+export of the active domain's history. Failed and blocked outcomes stay visible.
+
+</details>
 
 ## Why QueryForge?
 
@@ -137,6 +164,19 @@ Open <http://localhost:3000>. Start in **Data Domains**, select the bundled Anim
 Streaming example or create a clean domain, then add data inside that domain. If
 the Python API is offline, the sample-domain analysis remains explorable with a
 deterministic demo response. See the [Studio guide](docs/studio.md).
+
+The desktop workflow is:
+
+1. **Data Domains**: select the sample or create your own business context.
+2. **Data Sources**: upload CSV or Parquet, inspect the profile, review the semantic
+   contract, and publish. The bundled sample model is read only in Studio.
+3. **Semantic Studio**: find entities and metrics and inspect reviewed Join Paths.
+4. **Ask & Analyze**: ask a question, switch between a chart and table, and inspect
+   the SQL and Trust Trace. Live answers require the Python API and a configured provider.
+5. **Run History**: search, filter, export, or replay saved runs in the same domain.
+
+Use the sun or moon control in the top bar to switch themes. Studio remembers the
+choice in this browser. Dialogs support keyboard focus navigation and **Esc** to close.
 
 ## How It Works
 

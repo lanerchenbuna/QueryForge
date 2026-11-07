@@ -3,6 +3,14 @@
 import { publicationOutcome } from "./lib/publication-status";
 import { profileSourceFiles, type SourceProfile } from "./lib/source-profile";
 import { sourceStatus } from "./lib/source-status";
+import {
+  ArrowClockwiseIcon, ArrowDownIcon, ArrowRightIcon, ArrowsOutIcon,
+  ChartBarIcon, CheckIcon, CirclesThreeIcon, CodeIcon, DatabaseIcon,
+  DotsThreeIcon, GearSixIcon, GraphIcon, HouseIcon, MagnifyingGlassIcon,
+  MinusIcon, MoonIcon, PlusIcon, ShieldCheckIcon, SparkleIcon, SunIcon,
+  XIcon, ListIcon, CaretDownIcon,
+} from "@phosphor-icons/react";
+import { useDialog } from "./lib/use-dialog";
 
 import {
   ChangeEvent,
@@ -651,11 +659,30 @@ function chatgptUserEmail(): string | null {
 }
 
 function Icon({ value }: { value: string }) {
+  const Component = {
+    "◎": CirclesThreeIcon, "◇": HouseIcon, "▦": DatabaseIcon,
+    "⌘": GraphIcon, "✦": SparkleIcon, "↺": ArrowClockwiseIcon,
+    "···": DotsThreeIcon, "⚙": GearSixIcon, "＋": PlusIcon,
+    "×": XIcon, "⌕": MagnifyingGlassIcon, "↓": ArrowDownIcon,
+    "→": ArrowRightIcon, "◆": ShieldCheckIcon, "ƒ": ChartBarIcon,
+    "☰": ListIcon, "⌄": CaretDownIcon, "✓": CheckIcon,
+    "−": MinusIcon, "⌗": ArrowsOutIcon, "code": CodeIcon,
+    "sun": SunIcon, "moon": MoonIcon,
+  }[value] ?? SparkleIcon;
   return (
     <span className="icon-glyph" aria-hidden="true">
-      {value}
+      <Component size={20} weight="regular" />
     </span>
   );
+}
+
+function downloadJson(value: unknown, filename: string) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 /**
@@ -823,6 +850,11 @@ function streamQueryResult(state: StreamRunState): QueryResult {
 export default function Home() {
   const [activeView, setActiveView] = useState<View>("domains");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const navigationRef = useRef<HTMLElement>(null);
+  const domainMenuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const domainButtonRef = useRef<HTMLButtonElement>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("checking");
   const [query, setQuery] = useState(EXAMPLE_QUESTIONS[0]);
@@ -865,6 +897,60 @@ export default function Home() {
   const activeDomain =
     domains.find((domain) => domain.id === activeDomainId) ??
     INITIAL_DOMAINS[0];
+
+  useEffect(() => {
+    let frame = 0;
+    try {
+      const saved = localStorage.getItem("queryforge-theme");
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.dataset.theme = saved;
+        frame = requestAnimationFrame(() => setTheme(saved));
+      }
+    } catch { /* Appearance remains usable when browser storage is unavailable. */ }
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    try { localStorage.setItem("queryforge-theme", next); } catch { /* Optional preference. */ }
+  }
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const links = navigationRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+    links?.[0]?.focus();
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        menuButtonRef.current?.focus();
+      }
+      if (event.key === "Tab" && links?.length) {
+        const first = links[0], last = links[links.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", onKey); };
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    if (!domainMenuOpen) return;
+    domainMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    function dismiss(event: PointerEvent) {
+      if (!domainMenuRef.current?.contains(event.target as Node) && !domainButtonRef.current?.contains(event.target as Node)) setDomainMenuOpen(false);
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") { setDomainMenuOpen(false); domainButtonRef.current?.focus(); }
+    }
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("pointerdown", dismiss); window.removeEventListener("keydown", onKey); };
+  }, [domainMenuOpen]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1428,11 +1514,12 @@ export default function Home() {
 
   return (
     <div className="studio-shell">
-      <aside className={cn("sidebar", mobileMenuOpen && "sidebar-open")}>
+      <a className="skip-link button-sm" href="#workspace-content">Skip to workspace</a>
+      <aside id="workspace-navigation" ref={navigationRef} className={cn("sidebar", mobileMenuOpen && "sidebar-open")}>
         <div className="brand-block">
           <button
             className="brand-mark"
-            onClick={() => setActiveView("overview")}
+            onClick={() => { setActiveView("domains"); setMobileMenuOpen(false); }}
             aria-label="QueryForge home"
           >
             QF
@@ -1442,6 +1529,7 @@ export default function Home() {
             <div className="brand-caption">Semantic AI workspace</div>
           </div>
           <span className="beta-badge">BETA</span>
+          <button className="mobile-nav-close icon-button" onClick={() => setMobileMenuOpen(false)} aria-label="Close navigation"><Icon value="×" /></button>
         </div>
 
         <div className="sidebar-section-label">Workspace</div>
@@ -1461,9 +1549,6 @@ export default function Home() {
                 <strong>{item.label}</strong>
                 <small>{item.caption}</small>
               </span>
-              {item.id === "semantic" && (
-                <span className="nav-health" aria-label="healthy" />
-              )}
             </button>
           ))}
         </nav>
@@ -1505,7 +1590,7 @@ export default function Home() {
           <span className="profile-avatar">HC</span>
           <span>
             <strong>Workspace admin</strong>
-            <small>Local-first mode</small>
+            <small>Local workspace</small>
           </span>
           <Icon value="···" />
         </button>
@@ -1523,10 +1608,13 @@ export default function Home() {
         <header className="topbar">
           <button
             className="mobile-menu-button"
-            aria-label="Open navigation"
-            onClick={() => setMobileMenuOpen(true)}
+            ref={menuButtonRef}
+            aria-label={mobileMenuOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="workspace-navigation"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           >
-            ☰
+            <Icon value={mobileMenuOpen ? "×" : "☰"} />
           </button>
           <div className="breadcrumb">
             <span>Workspace</span>
@@ -1542,6 +1630,7 @@ export default function Home() {
                 connection === "live" && "is-live",
               )}
               onClick={() => setSettingsOpen(true)}
+              aria-label={connection === "live" ? "Live backend, open runtime settings" : connection === "checking" ? "Checking backend connection" : "Demo mode, open runtime settings"}
             >
               <span className="connection-dot" />
               {connection === "checking"
@@ -1552,19 +1641,20 @@ export default function Home() {
             </button>
             <button
               className="dataset-switcher"
+              ref={domainButtonRef}
               onClick={() => setDomainMenuOpen((open) => !open)}
               aria-expanded={domainMenuOpen}
-              aria-haspopup="menu"
+              aria-controls="domain-switcher"
             >
-              <span className="dataset-icon">A</span>
+              <span className="dataset-icon"><Icon value="◎" /></span>
               <span>
                 <small>Active data domain</small>
                 <strong>{activeDomain.name}</strong>
               </span>
-              <span className="chevron">⌄</span>
+              <Icon value="⌄" />
             </button>
             {domainMenuOpen && (
-              <div className="domain-switcher-menu" role="menu">
+              <div className="domain-switcher-menu" id="domain-switcher" ref={domainMenuRef}>
                 <div className="domain-switcher-heading">
                   <span>Switch data domain</span>
                   <button
@@ -1584,7 +1674,7 @@ export default function Home() {
                       domain.id === activeDomain.id && "active",
                     )}
                     onClick={() => selectDomain(domain)}
-                    role="menuitem"
+                    aria-current={domain.id === activeDomain.id ? "true" : undefined}
                   >
                     <span className="domain-option-icon">
                       {domain.isSample ? "A" : "D"}
@@ -1611,16 +1701,22 @@ export default function Home() {
               </div>
             )}
             <button
+              className="icon-button theme-toggle"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            ><Icon value={theme === "dark" ? "sun" : "moon"} /></button>
+            <button
               className="icon-button"
               aria-label="Open settings"
               onClick={() => setSettingsOpen(true)}
             >
-              ⚙
+              <Icon value="⚙" />
             </button>
           </div>
         </header>
 
-        <div className="content-scroll">
+        <div className="content-scroll" id="workspace-content" tabIndex={-1}>
           {activeView === "domains" && (
             <DomainsView
               domains={domains}
@@ -1672,6 +1768,7 @@ export default function Home() {
               selectEntity={setSelectedEntity}
               activeEntity={activeEntity}
               toast={setToast}
+              openAsk={() => setActiveView("ask")}
             />
           )}
           {activeView === "ask" && (
@@ -1704,7 +1801,7 @@ export default function Home() {
               filter={runFilter}
               setFilter={setRunFilter}
               selectRun={selectRun}
-              downloadResult={downloadResult}
+              downloadResult={() => downloadJson(activeDomainRuns, `${activeDomain.slug}-run-history.json`)}
             />
           )}
         </div>
@@ -1752,7 +1849,6 @@ export default function Home() {
 
       {toast && (
         <div className="toast" role="status">
-          <span>✓</span>
           {toast}
         </div>
       )}
@@ -1781,18 +1877,17 @@ function DomainsView({
         description="Create isolated business contexts, then add each domain’s sources, semantic definitions, policies, and analytical history."
         action={
           <button className="primary-button" onClick={createDomain}>
-            <span>＋</span> New data domain
+            <span><Icon value="＋" /></span> New data domain
           </button>
         }
       />
 
       <section className="domain-hero panel">
         <div>
-          <span className="panel-kicker">DOMAIN-FIRST WORKFLOW</span>
-          <h2>One platform. Many governed business contexts.</h2>
+          <h2>A clear context for every answer</h2>
           <p>
-            Every upload, entity, metric, Join Path, contract, and run belongs
-            to the selected data domain. Context never leaks across domains.
+            Start with a data domain. Keep its sources, business definitions,
+            and analysis together, from the first upload to the final answer.
           </p>
         </div>
         <div className="domain-flow" aria-label="Data domain workflow">
@@ -1828,15 +1923,15 @@ function DomainsView({
             >
               <div className="domain-card-top">
                 <span className={cn("domain-card-icon", domain.isSample && "sample")}>
-                  {domain.isSample ? "A" : "D"}
+                  <Icon value={domain.isSample ? "▦" : "◎"} />
                 </span>
                 <div>
                   <div className="domain-card-labels">
                     {domain.id === activeDomainId && (
-                      <span className="status-pill success">ACTIVE</span>
+                      <span className="status-pill success"><Icon value="✓" /> Active</span>
                     )}
                     {domain.isSample && (
-                      <span className="status-pill neutral">SAMPLE</span>
+                      <span className="status-pill neutral">Sample</span>
                     )}
                   </div>
                   <h2>{domain.name}</h2>
@@ -1884,7 +1979,7 @@ function DomainsView({
         })}
 
         <button className="domain-create-card" onClick={createDomain}>
-          <span>＋</span>
+          <span><Icon value="＋" /></span>
           <strong>Create another data domain</strong>
           <p>Start with a clean semantic and governance boundary.</p>
         </button>
@@ -2026,13 +2121,13 @@ function OverviewView({
             SEMANTIC LAYER ONLINE
           </div>
           <h1>
-            Turn this domain into trusted answers.
-            <span>Inspect every decision.</span>
+            Turn your data into trusted answers
+            <span>Inspect every decision</span>
           </h1>
           <p>
             <strong>{domain.name}</strong> is the selected sample domain.
-            Natural-language analytics stays grounded in its governed metrics,
-            explicit Join Paths, and read-only SQL policy.
+            Ask questions with governed metrics, reviewed Join Paths,
+            and a read only SQL policy.
           </p>
           <form
             className="hero-query"
@@ -2041,7 +2136,7 @@ function OverviewView({
               void runQuery();
             }}
           >
-            <span className="query-spark">✦</span>
+            <span className="query-spark"><Icon value="✦" /></span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
@@ -2120,9 +2215,7 @@ function OverviewView({
               <h2>Watch hours by genre</h2>
             </div>
             <div className="segmented small">
-              <button className="active">30D</button>
-              <button>90D</button>
-              <button>1Y</button>
+              <span className="caption-4">30 day sample</span>
             </div>
           </div>
           <div className="chart-summary">
@@ -2267,7 +2360,7 @@ function OverviewView({
               ["Model gateway", connection === "live" ? "Connected" : "Demo", "Auto"],
             ].map(([label, value, detail]) => (
               <div className="runtime-row" key={label}>
-                <span className="runtime-symbol">◆</span>
+                <span className="runtime-symbol"><Icon value="◆" /></span>
                 <span>
                   <strong>{label}</strong>
                   <small>{detail}</small>
@@ -2321,6 +2414,8 @@ function SourcesView({
   openUpload: () => void;
   openSemantic: () => void;
 }) {
+  const [tableSearch, setTableSearch] = useState("");
+  const visibleTables = TABLES.filter(row => row[0].toLowerCase().includes(tableSearch.toLowerCase().trim()));
   return (
     <div className="page">
       <PageHeader
@@ -2329,7 +2424,7 @@ function SourcesView({
         description="Sources are isolated inside the active data domain and can publish only with a reviewed semantic contract."
         action={
           <button className="primary-button" onClick={openUpload}>
-            <span>＋</span> Add data source
+            <span><Icon value="＋" /></span> Add data source
           </button>
         }
       />
@@ -2344,9 +2439,7 @@ function SourcesView({
               <h3>Anime Streaming</h3>
               <p>SQLite · synthetic product analytics</p>
             </div>
-            <button className="icon-button" aria-label="Source actions">
-              ···
-            </button>
+
           </div>
           <div className="source-stats">
             <div>
@@ -2363,7 +2456,7 @@ function SourcesView({
             </div>
             <div>
               <span>Last profile</span>
-              <strong>4m ago</strong>
+              <strong>Bundled sample</strong>
             </div>
           </div>
           <div className="source-contract-row">
@@ -2378,7 +2471,7 @@ function SourcesView({
         )}
 
         <button className="add-source-card" onClick={openUpload}>
-          <span className="add-source-icon">＋</span>
+          <span className="add-source-icon"><Icon value="＋" /></span>
           <strong>
             {domain.isSample ? "Connect another source" : "Add the first domain source"}
           </strong>
@@ -2439,8 +2532,8 @@ function SourcesView({
               <h2>Table inventory</h2>
             </div>
             <div className="table-search">
-              <span>⌕</span>
-              <input placeholder="Filter tables…" aria-label="Filter tables" />
+              <span><Icon value="⌕" /></span>
+              <input value={tableSearch} onChange={event => setTableSearch(event.target.value)} placeholder="Filter tables…" aria-label="Filter tables" />
             </div>
           </div>
           <div className="data-table">
@@ -2450,7 +2543,7 @@ function SourcesView({
               <span>Role</span>
               <span>Semantic coverage</span>
             </div>
-            {TABLES.map(([table, rows, role, coverage]) => (
+            {visibleTables.map(([table, rows, role, coverage]) => (
               <div className="data-table-row four" key={table}>
                 <span className="table-name">
                   <i>{role === "Fact" ? "F" : "D"}</i>
@@ -2475,7 +2568,8 @@ function SourcesView({
                 </span>
               </div>
             ))}
-            <button className="table-more">Show all 15 tables</button>
+            {visibleTables.length === 0 && <div className="empty-state" role="status"><Icon value="⌕" /><h3>No matching tables</h3><p>Try a table name such as anime or watch.</p><button className="secondary-button" onClick={() => setTableSearch("")}>Clear search</button></div>}
+            <button className="table-more" onClick={openSemantic}>Explore all 15 semantic entities →</button>
           </div>
         </section>
         )}
@@ -2490,7 +2584,7 @@ function SourcesView({
           <div className="pipeline-steps">
             {[
               ["01", "Upload", "Bytes accepted and fingerprinted"],
-              ["02", "Profile", "Schema, grain and quality inferred"],
+              ["02", "Profile", "Columns and sample values inspected"],
               ["03", "Review semantics", "Owner confirms business meaning"],
               ["04", "Validate", "Blocking contracts enforced"],
               ["05", "Publish", "Data + semantics commit together"],
@@ -2531,6 +2625,7 @@ function SemanticView({
   selectEntity,
   activeEntity,
   toast,
+  openAsk,
 }: {
   domain: DataDomain;
   hasSources: boolean;
@@ -2544,182 +2639,48 @@ function SemanticView({
   selectEntity: (name: string) => void;
   activeEntity: Entity;
   toast: (message: string) => void;
+  openAsk: () => void;
 }) {
+  const [metricSearch, setMetricSearch] = useState("");
+  const [graphZoom, setGraphZoom] = useState(1);
+  const graphViewportRef = useRef<HTMLDivElement>(null);
+  function fitGraph() {
+    const width = graphViewportRef.current?.clientWidth;
+    if (width) setGraphZoom(Math.min(1, Math.max(0.5, (width - 16) / 860)));
+  }
+  useEffect(() => {
+    const viewport = graphViewportRef.current;
+    if (!viewport) return;
+    const observer = new ResizeObserver(() => {
+      setGraphZoom(Math.min(1, Math.max(0.5, (viewport.clientWidth - 16) / 860)));
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [tab, domain.id]);
+  const visibleMetrics = METRICS.filter(metric => `${metric.label} ${metric.entity} ${metric.name}`.toLowerCase().includes(metricSearch.toLowerCase().trim()));
+  const sampleEditNotice = "The bundled sample is read only. Author changes in the semantic YAML or upload a source to review its contract.";
   if (!domain.isSample) {
+    const published = domain.status === "ready";
     return (
       <div className="page semantic-page">
         <PageHeader
           eyebrow="DOMAIN SEMANTICS"
           title={`${domain.name} · Semantic Studio`}
-          description="Build a domain-owned business contract. QueryForge never imports entities, metrics, or Join Paths from another domain."
-          action={
-            <div className="header-action-group">
-              <button className="secondary-button" onClick={openUpload}>
-                ＋ Add source
-              </button>
-              <button
-                className="primary-button"
-                disabled={!hasSources}
-                onClick={() =>
-                  toast(
-                    hasSources
-                      ? "Semantic draft saved for validation."
-                      : "Add a source before defining its semantic contract.",
-                  )
-                }
-              >
-                Validate draft
-              </button>
-            </div>
-          }
+          description="Review this domain’s business meaning during source onboarding. Its contract stays with its published data."
+          action={<button className="secondary-button" onClick={openUpload}><Icon value="＋" /> Add data source</button>}
         />
-
-        <div className="semantic-health-strip draft">
-          <div className="health-score-mini">
-            <strong>{hasSources ? "42" : "0"}</strong>
-            <span>/100</span>
-          </div>
+        <section className="panel semantic-empty-state">
+          <span className="semantic-empty-icon"><Icon value="⌘" /></span>
           <div>
-            <strong>
-              {hasSources
-                ? "Domain contract needs business review"
-                : "Semantic construction starts with domain data"}
-            </strong>
-            <p>
-              Identity, grain, metrics, relationships, ownership, policy, and
-              quality checks must all pass before analysis unlocks.
-            </p>
+            <span className={cn("status-pill", published ? "success" : "neutral")}>{published ? "Published" : "Review required"}</span>
+            <h2>{published ? "Your published contract is ready for analysis" : hasSources ? "Complete the source and semantic review" : "Start with this domain’s own data"}</h2>
+            <p>{published
+              ? "Ask questions against this domain’s published data, or add another source to review its entity, grain, dimensions and metrics."
+              : "Upload CSV or Parquet, inspect its columns, and review the business entity, grain, owner, sensitivity and metrics before publishing."}</p>
+            <p>Review source contracts in the upload wizard. Author complete relationships, time rules and units in the semantic YAML.</p>
           </div>
-          <div className="semantic-health-metrics">
-            <span>
-              <strong>{hasSources ? 1 : 0}</strong> draft entities
-            </span>
-            <span>
-              <strong>0</strong> relationships
-            </span>
-            <span>
-              <strong>0</strong> metrics
-            </span>
-            <span>
-              <strong>0</strong> Join Paths
-            </span>
-          </div>
-          <span className="status-pill neutral">DRAFT</span>
-        </div>
-
-        {!hasSources ? (
-          <section className="panel semantic-empty-state">
-            <span className="semantic-empty-icon">⌘</span>
-            <div>
-              <span className="panel-kicker">NO PHYSICAL MODEL YET</span>
-              <h2>Add data before declaring business meaning</h2>
-              <p>
-                QueryForge profiles tables and columns first, then proposes
-                candidate entities without pretending technical schema names
-                are business definitions.
-              </p>
-            </div>
-            <button className="primary-button" onClick={openUpload}>
-              Add governed source →
-            </button>
-          </section>
-        ) : (
-          <div className="semantic-builder">
-            <aside className="semantic-builder-steps">
-              <span className="panel-kicker">CONTRACT BUILDER</span>
-              {[
-                ["01", "Identity & grain", "active"],
-                ["02", "Dimensions & measures", ""],
-                ["03", "Metrics", ""],
-                ["04", "Relationships", ""],
-                ["05", "Policy & quality", ""],
-                ["06", "Review & publish", ""],
-              ].map(([index, label, state]) => (
-                <button className={state} key={label}>
-                  <span>{index}</span>
-                  <strong>{label}</strong>
-                </button>
-              ))}
-            </aside>
-            <section className="panel semantic-contract-editor">
-              <div className="panel-heading">
-                <div>
-                  <span className="panel-kicker">STEP 01</span>
-                  <h2>Define business identity and grain</h2>
-                </div>
-                <span className="status-pill neutral">REVIEW REQUIRED</span>
-              </div>
-              <p className="contract-editor-intro">
-                Start from the physical profile, then name the real business
-                entity and state exactly what one row represents.
-              </p>
-              <div className="semantic-contract-fields">
-                <label>
-                  <span>Business entity</span>
-                  <input defaultValue="uploaded_record" />
-                  <small>Use a stable singular business concept.</small>
-                </label>
-                <label>
-                  <span>Primary source</span>
-                  <input value="Latest profiled upload" readOnly />
-                  <small>Scoped to {domain.name}.</small>
-                </label>
-                <label className="wide">
-                  <span>Business description</span>
-                  <textarea
-                    rows={3}
-                    defaultValue="One reviewed business record represented by the uploaded source."
-                  />
-                </label>
-                <label>
-                  <span>Grain</span>
-                  <input defaultValue="record_id" />
-                  <small>Required for safe aggregation.</small>
-                </label>
-                <label>
-                  <span>Owner</span>
-                  <input defaultValue={domain.owner} />
-                  <small>Accountable for semantic approval.</small>
-                </label>
-              </div>
-              <div className="contract-guardrail">
-                <span>!</span>
-                <p>
-                  Analysis remains blocked until the primary key is unique,
-                  every metric declares an aggregation and denominator, and all
-                  multi-hop relationships have a reviewed Join Path.
-                </p>
-              </div>
-              <footer>
-                <span>Autosaved as a domain-local draft</span>
-                <button
-                  className="primary-button"
-                  onClick={() => toast("Identity and grain saved.")}
-                >
-                  Save & continue →
-                </button>
-              </footer>
-            </section>
-            <aside className="panel semantic-checklist">
-              <span className="panel-kicker">PUBLICATION GATE</span>
-              <h3>Required contract</h3>
-              {[
-                ["Entity has a clear grain", true],
-                ["Primary key is unique", false],
-                ["Metric units are explicit", false],
-                ["Cardinality is reviewed", false],
-                ["Sensitive fields are classified", false],
-                ["Quality checks pass", false],
-              ].map(([label, passed]) => (
-                <div key={String(label)} className={cn(passed && "passed")}>
-                  <span>{passed ? "✓" : "○"}</span>
-                  <strong>{label}</strong>
-                </div>
-              ))}
-              <p>Data and semantics publish atomically only after 100%.</p>
-            </aside>
-          </div>
-        )}
+          <button className="primary-button" onClick={published ? openAsk : openUpload}>{published ? "Ask & Analyze" : "Open source onboarding"}<Icon value="→" /></button>
+        </section>
       </div>
     );
   }
@@ -2734,15 +2695,15 @@ function SemanticView({
           <div className="header-action-group">
             <button
               className="secondary-button"
-              onClick={() => toast("Semantic model YAML downloaded.")}
+              disabled title={sampleEditNotice}
             >
               ↓ Export YAML
             </button>
             <button
               className="primary-button success-button"
-              onClick={() => toast("Semantic model is already published.")}
+              onClick={() => toast("You are viewing the bundled sample model. Its status is separate from live run evidence.")}
             >
-              ✓ Published
+              Sample model
             </button>
           </div>
         }
@@ -2779,19 +2740,19 @@ function SemanticView({
 
       <div className="semantic-tabs">
         <button
-          className={cn(tab === "graph" && "active")}
+          className={cn(tab === "graph" && "active")} aria-pressed={tab === "graph"}
           onClick={() => setTab("graph")}
         >
           Relationship graph
         </button>
         <button
-          className={cn(tab === "metrics" && "active")}
+          className={cn(tab === "metrics" && "active")} aria-pressed={tab === "metrics"}
           onClick={() => setTab("metrics")}
         >
           Metric catalog <span>11</span>
         </button>
         <button
-          className={cn(tab === "paths" && "active")}
+          className={cn(tab === "paths" && "active")} aria-pressed={tab === "paths"}
           onClick={() => setTab("paths")}
         >
           Governed Join Paths <span>7</span>
@@ -2806,14 +2767,14 @@ function SemanticView({
                 <span className="panel-kicker">ENTITIES</span>
                 <strong>Business model</strong>
               </div>
-              <button aria-label="Add entity">＋</button>
+              <button aria-label="Add entity" disabled title={sampleEditNotice}><Icon value="＋" /></button>
             </div>
             <label className="entity-search">
-              <span>⌕</span>
+              <span><Icon value="⌕" /></span>
               <input
                 value={entityFilter}
                 onChange={(event) => setEntityFilter(event.target.value)}
-                placeholder="Find an entity…"
+                aria-label="Find an entity" placeholder="Find an entity…"
               />
             </label>
             <div className="entity-list">
@@ -2835,6 +2796,7 @@ function SemanticView({
                 </button>
               ))}
             </div>
+            {filteredEntities.length === 0 && <div className="empty-state" role="status"><h3>No matching entities</h3><p>Try a business or table name.</p></div>}
             <div className="entity-legend">
               <span>
                 <i className="entity-type-dot dimension" /> Dimension
@@ -2851,20 +2813,17 @@ function SemanticView({
           <section className="graph-stage">
             <div className="graph-toolbar">
               <div>
-                <button className="active">All domains</button>
-                <button>Content</button>
-                <button>Engagement</button>
-                <button>Commerce</button>
+                <span className="caption-4">Sample relationship map</span>
               </div>
               <div>
-                <button aria-label="Zoom out">−</button>
-                <span>85%</span>
-                <button aria-label="Zoom in">＋</button>
-                <button aria-label="Fit graph">⌗</button>
+                <button aria-label="Zoom out" onClick={() => setGraphZoom(zoom => Math.max(0.5, zoom - 0.1))} disabled={graphZoom <= 0.5}><Icon value="−" /></button>
+                <span className="caption-5" aria-live="polite">{Math.round(graphZoom * 100)}%</span>
+                <button aria-label="Zoom in" onClick={() => setGraphZoom(zoom => Math.min(1.5, zoom + 0.1))} disabled={graphZoom >= 1.5}><Icon value="＋" /></button>
+                <button aria-label="Fit graph" onClick={fitGraph}><Icon value="⌗" /></button>
               </div>
             </div>
-            <div className="graph-scroll">
-              <div className="graph-canvas">
+            <div className="graph-scroll" ref={graphViewportRef}>
+              <div className="graph-canvas" style={{ transform: `scale(${graphZoom})` }}>
                 <div className="graph-domain domain-content">CONTENT</div>
                 <div className="graph-domain domain-engagement">
                   ENGAGEMENT
@@ -2916,7 +2875,7 @@ function SemanticView({
               <span className={cn("entity-badge", activeEntity.kind)}>
                 {activeEntity.kind.toUpperCase()}
               </span>
-              <button aria-label="Close inspector">×</button>
+
             </div>
             <h2>{activeEntity.label}</h2>
             <code>{activeEntity.table}</code>
@@ -2936,7 +2895,7 @@ function SemanticView({
               </label>
               <label>
                 <span>Sensitivity</span>
-                <select defaultValue="internal">
+                <select defaultValue="internal" disabled title={sampleEditNotice}>
                   <option>public</option>
                   <option>internal</option>
                   <option>restricted</option>
@@ -2946,7 +2905,7 @@ function SemanticView({
             <div className="inspector-section">
               <div className="inspector-section-heading">
                 <span className="panel-kicker">DIMENSIONS</span>
-                <button>＋</button>
+                <button disabled title={sampleEditNotice} aria-label="Add dimension"><Icon value="＋" /></button>
               </div>
               {[
                 ["Primary key", activeEntity.grain.split(" + ")[0]],
@@ -2958,7 +2917,7 @@ function SemanticView({
                     <strong>{label}</strong>
                     <code>{field}</code>
                   </span>
-                  <button>···</button>
+                  <button disabled title={sampleEditNotice} aria-label="Edit dimension"><Icon value="···" /></button>
                 </div>
               ))}
             </div>
@@ -2978,9 +2937,9 @@ function SemanticView({
             </div>
             <button
               className="save-entity-button"
-              onClick={() => toast(`${activeEntity.label} draft saved.`)}
+              disabled title={sampleEditNotice}
             >
-              Save entity draft
+              Sample model is read only
             </button>
           </aside>
         </div>
@@ -2990,17 +2949,18 @@ function SemanticView({
         <div className="metric-catalog">
           <div className="catalog-toolbar">
             <label className="entity-search">
-              <span>⌕</span>
-              <input placeholder="Search 11 metrics…" />
+              <span><Icon value="⌕" /></span>
+              <input value={metricSearch} onChange={event => setMetricSearch(event.target.value)} aria-label="Search metrics" placeholder="Search metrics…" />
             </label>
-            <button className="secondary-button">Filter by domain</button>
-            <button className="primary-button">＋ New metric</button>
+
+            <button className="secondary-button" disabled title={sampleEditNotice}><Icon value="＋" /> New metric</button>
           </div>
+          {visibleMetrics.length === 0 && <div className="empty-state" role="status"><Icon value="⌕" /><h3>No matching metrics</h3><p>Try revenue, watch or an entity name.</p><button className="secondary-button" onClick={() => setMetricSearch("")}>Clear search</button></div>}
           <div className="metric-catalog-grid">
-            {METRICS.map((metric) => (
+            {visibleMetrics.map((metric) => (
               <article className="metric-definition-card" key={metric.name}>
                 <div className="metric-definition-top">
-                  <span className="metric-function">ƒ</span>
+                  <span className="metric-function"><Icon value="ƒ" /></span>
                   <div>
                     <h3>{metric.label}</h3>
                     <code>{metric.name}</code>
@@ -3016,8 +2976,8 @@ function SemanticView({
                   <span>
                     Entity <strong>{metric.entity}</strong>
                   </span>
-                  <button onClick={() => toast(`${metric.label} opened.`)}>
-                    Edit →
+                  <button onClick={() => { selectEntity(metric.entity); setTab("graph"); }}>
+                    Inspect entity →
                   </button>
                 </footer>
               </article>
@@ -3037,7 +2997,7 @@ function SemanticView({
                 cannot invent joins or silently duplicate facts.
               </p>
             </div>
-            <button className="primary-button">＋ Define Join Path</button>
+            <button className="secondary-button" disabled title={sampleEditNotice}><Icon value="＋" /> Define Join Path</button>
           </div>
           <div className="join-paths-list">
             {JOIN_PATHS.map((path) => (
@@ -3057,7 +3017,7 @@ function SemanticView({
                 </div>
                 <span className="hop-count">{path.hops} hops</span>
                 <span className="status-pill success">{path.risk}</span>
-                <button aria-label={`Edit ${path.label}`}>···</button>
+                <button aria-label={`Edit ${path.label}`} disabled title={sampleEditNotice}><Icon value="···" /></button>
               </article>
             ))}
           </div>
@@ -3147,6 +3107,7 @@ function AskView({
   selectRun: (run: RunRecord) => void;
   connection: ConnectionState;
 }) {
+  const [chartMode, setChartMode] = useState<"bar" | "table">("bar");
   if (!domain.isSample && domain.status !== "ready") {
     return (
       <div className="page domain-analysis-page">
@@ -3162,7 +3123,7 @@ function AskView({
         />
         <section className="panel domain-analysis-lock">
           <div className="analysis-lock-visual">
-            <span>✦</span>
+            <span><Icon value="✦" /></span>
             <i />
             <b>⌘</b>
             <i />
@@ -3211,7 +3172,7 @@ function AskView({
     <div className="ask-workspace">
       <aside className="conversation-rail">
         <button className="new-query-button" onClick={() => setQuery("")}>
-          <span>＋</span> New analysis
+          <span><Icon value="＋" /></span> New analysis
         </button>
         <div className="conversation-label">RECENT</div>
         {runs.map((run) => (
@@ -3220,7 +3181,7 @@ function AskView({
             key={run.id}
             onClick={() => selectRun(run)}
           >
-            <span>✦</span>
+            <span><Icon value="✦" /></span>
             <span>
               <strong>{run.question}</strong>
               <small>{run.isDemo ? `${run.time} · DEMO` : run.time}</small>
@@ -3228,7 +3189,7 @@ function AskView({
           </button>
         ))}
         <div className="conversation-bottom">
-          <span className="shield-icon">◆</span>
+          <span className="shield-icon"><Icon value="◆" /></span>
           <div>
             <strong>Governed mode</strong>
             <small>Semantic model required</small>
@@ -3249,14 +3210,12 @@ function AskView({
             <button className="secondary-button" onClick={downloadResult}>
               ↓ Export
             </button>
-            <button className="icon-button" aria-label="More actions">
-              ···
-            </button>
+
           </div>
         </div>
 
         <form className="ask-composer" onSubmit={submitQuery}>
-          <span className="query-spark">✦</span>
+          <span className="query-spark"><Icon value="✦" /></span>
           <textarea
             value={query}
             onChange={(event) => setQuery(event.target.value)}
@@ -3311,7 +3270,7 @@ function AskView({
               data-event-protocol={EVENT_PROTOCOL_VERSION}
               data-stream-status={streamState?.status ?? "streaming"}
             >
-              <div className="run-progress-orb">QF</div>
+              <div className="skeleton-lines" aria-hidden="true"><span /><span /><span /></div>
               <h2>Streaming a governed answer</h2>
               <p>
                 Live frames from <code>POST /ask/stream</code> (event protocol v
@@ -3380,7 +3339,7 @@ function AskView({
               className="run-progress-panel"
               data-progress={runStage === 0 ? "indeterminate" : "milestones"}
             >
-              <div className="run-progress-orb">QF</div>
+              <div className="skeleton-lines" aria-hidden="true"><span /><span /><span /></div>
               <h2>Building a governed answer</h2>
               <p>
                 {connection === "live"
@@ -3563,11 +3522,11 @@ function AskView({
                     </h2>
                   </div>
                   <div className="segmented small">
-                    <button className="active">Bar</button>
-                    <button>Table</button>
+                    <button className={cn(chartMode === "bar" && "active")} aria-pressed={chartMode === "bar"} onClick={() => setChartMode("bar")}>Bar</button>
+                    <button className={cn(chartMode === "table" && "active")} aria-pressed={chartMode === "table"} onClick={() => setChartMode("table")}>Table</button>
                   </div>
                 </div>
-                <div className="horizontal-chart">
+                {chartMode === "bar" ? <div className="horizontal-chart">
                   {result.rows.slice(0, 8).map((row, index) => {
                     const value = Number(row[1]) || 0;
                     return (
@@ -3580,7 +3539,7 @@ function AskView({
                       </div>
                     );
                   })}
-                </div>
+                </div> : <div className="result-table-wrap"><table className="result-data-table"><caption className="sr-only">Returned query results</caption><thead><tr>{result.columns.map((column, index) => <th key={`${column}-${index}`} scope="col">{column}</th>)}</tr></thead><tbody>{result.rows.map((row, index) => <tr key={index}>{row.map((value, column) => <td key={column}>{value == null ? "NULL" : String(value)}</td>)}</tr>)}</tbody></table></div>}
                 <div className="chart-footnote">
                   <span>
                     <i className="legend-primary" /> {result.columns[1] ?? "Value"}
@@ -3788,6 +3747,8 @@ function RunsView({
   selectRun: (run: RunRecord) => void;
   downloadResult: () => void;
 }) {
+  const [search, setSearch] = useState("");
+  const visibleRuns = runs.filter(run => `${run.question} ${run.id}`.toLowerCase().includes(search.toLowerCase().trim()));
   const passed = allRuns.filter((run) => run.status === "Passed").length;
   const blocked = allRuns.filter((run) => run.status === "Blocked").length;
   // Summary is computed from stored runs; nothing is scaled up or estimated.
@@ -3802,8 +3763,8 @@ function RunsView({
       allRuns.length ? `${((passed / allRuns.length) * 100).toFixed(1)}%` : "—",
       `${passed} success of ${allRuns.length}`,
     ],
-    ["Policy blocks", String(blocked), "Non-success runs kept as-is"],
-    ["Median latency", "—", "Not measured server-side yet"],
+    ["Policy blocks", String(blocked), "Blocked runs remain visible"],
+    ["Median latency", "—", "Not yet measured"],
   ];
   return (
     <div className="page">
@@ -3834,7 +3795,7 @@ function RunsView({
             {(["All", "Passed", "Blocked"] as const).map((item) => (
               <button
                 key={item}
-                className={cn(filter === item && "active")}
+                className={cn(filter === item && "active")} aria-pressed={filter === item}
                 onClick={() => setFilter(item)}
               >
                 {item}
@@ -3842,10 +3803,10 @@ function RunsView({
             ))}
           </div>
           <label className="table-search wide">
-            <span>⌕</span>
-            <input placeholder="Search questions or run IDs…" />
+            <span><Icon value="⌕" /></span>
+            <input value={search} onChange={event => setSearch(event.target.value)} aria-label="Search run history" placeholder="Search questions or run IDs…" />
           </label>
-          <button className="secondary-button">Last 30 days ⌄</button>
+          <span className="caption-5">{visibleRuns.length} of {allRuns.length} runs</span>
         </div>
         <div className="runs-table">
           <div className="runs-table-head">
@@ -3857,7 +3818,7 @@ function RunsView({
             <span>When</span>
             <span />
           </div>
-          {runs.map((run) => (
+          {visibleRuns.map((run) => (
             <button
               className="runs-table-row"
               key={run.id}
@@ -3896,6 +3857,7 @@ function RunsView({
             </button>
           ))}
         </div>
+        {visibleRuns.length === 0 && <div className="empty-state" role="status"><Icon value="↺" /><h3>{allRuns.length ? "No matching runs" : "Your analysis history starts here"}</h3><p>{allRuns.length ? "Try another question, run ID or status filter." : "Run an analysis in Ask & Analyze to keep its evidence here."}</p>{allRuns.length > 0 && <button className="secondary-button" onClick={() => { setSearch(""); setFilter("All"); }}>Clear filters</button>}</div>}
       </section>
     </div>
   );
@@ -3944,8 +3906,10 @@ function UploadModal({
 }) {
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
+  const dialogRef = useDialog(close);
+
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div className="modal-backdrop" role="presentation" ref={dialogRef}>
       <div
         className="modal upload-modal"
         role="dialog"
@@ -3962,7 +3926,7 @@ function UploadModal({
             </p>
           </div>
           <button className="modal-close" onClick={close} aria-label="Close">
-            ×
+            <Icon value="×" />
           </button>
         </div>
 
@@ -3995,8 +3959,8 @@ function UploadModal({
               onClick={() => fileInputRef.current?.click()}
             >
               <span className="upload-cloud">↑</span>
-              <strong>Drop CSV or Parquet files here</strong>
-              <p>or click to browse · up to 25 MB per file</p>
+              <strong>Choose CSV or Parquet files</strong>
+              <p>Browse files · up to 25 MB per file</p>
               <span className="browse-button">Choose files</span>
             </button>
             <input
@@ -4337,17 +4301,19 @@ function CreateDomainModal({
     event.preventDefault();
     if (name.trim().length < 2 || isCreating) return;
     setIsCreating(true);
-    await createDomain({
+    try { await createDomain({
       name: name.trim(),
       description:
         description.trim() ||
         "A governed business context for data, semantics, policy, and trusted analysis.",
       owner: owner.trim() || "Workspace admin",
-    });
+    }); } finally { setIsCreating(false); }
   }
 
+  const dialogRef = useDialog(close);
+
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div className="modal-backdrop" role="presentation" ref={dialogRef}>
       <form
         className="modal create-domain-modal"
         role="dialog"
@@ -4370,7 +4336,7 @@ function CreateDomainModal({
             type="button"
             aria-label="Close"
           >
-            ×
+            <Icon value="×" />
           </button>
         </div>
         <div className="create-domain-body">
@@ -4397,7 +4363,7 @@ function CreateDomainModal({
           <label>
             <span>Domain name</span>
             <input
-              autoFocus
+              data-autofocus
               value={name}
               onChange={(event) => setName(event.target.value)}
               placeholder="e.g. Retail Commerce"
@@ -4424,7 +4390,7 @@ function CreateDomainModal({
             />
           </label>
           <div className="domain-boundary-note">
-            <span>◆</span>
+            <span><Icon value="◆" /></span>
             <p>
               Creating the domain does not copy sample semantics. The next step
               is to upload this domain’s own data and review its semantic
@@ -4456,8 +4422,10 @@ function SettingsModal({
   connection: ConnectionState;
   close: () => void;
 }) {
+  const dialogRef = useDialog(close);
+
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div className="modal-backdrop" role="presentation" ref={dialogRef}>
       <div
         className="modal settings-modal"
         role="dialog"
@@ -4468,10 +4436,10 @@ function SettingsModal({
           <div>
             <span className="panel-kicker">WORKSPACE</span>
             <h2 id="settings-title">Runtime settings</h2>
-            <p>Control the live QueryForge connection and query defaults.</p>
+            <p>Inspect the connection and the runtime defaults.</p>
           </div>
           <button className="modal-close" onClick={close} aria-label="Close">
-            ×
+            <Icon value="×" />
           </button>
         </div>
         <div className="settings-status-card">
@@ -4507,7 +4475,7 @@ function SettingsModal({
         <div className="settings-form">
           <label>
             <span>Model profile</span>
-            <select defaultValue="auto">
+            <select defaultValue="auto" disabled>
               <option value="auto">Auto route</option>
               <option value="qwen">Qwen Plus</option>
               <option value="openai">GPT-4.1 mini</option>
@@ -4516,7 +4484,7 @@ function SettingsModal({
           </label>
           <label>
             <span>Complexity</span>
-            <select defaultValue="auto">
+            <select defaultValue="auto" disabled>
               <option value="auto">Auto</option>
               <option value="minimal">Minimal</option>
               <option value="complex">Complex</option>
@@ -4534,15 +4502,13 @@ function SettingsModal({
               <strong>Create report artifacts</strong>
               <small>Generate shareable HTML evidence</small>
             </span>
-            <input type="checkbox" defaultChecked />
+            <input type="checkbox" defaultChecked disabled />
           </label>
         </div>
         <div className="modal-actions">
-          <button className="secondary-button" onClick={close}>
-            Cancel
-          </button>
+
           <button className="primary-button" onClick={close}>
-            Save settings
+            Done
           </button>
         </div>
       </div>
